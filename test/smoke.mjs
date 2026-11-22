@@ -55,7 +55,7 @@ ea.stop()
 store.close()
 await fake.close()
 rmSync(dir, { recursive: true, force: true })
-console.log('smoke ok: EA 握手/配对/快照/K 线 + 本地 SQLite 写入读取')
+console.log('smoke ok: EA 握手/配对/快照/K 线/下单 + 本地 SQLite 写入读取')
 
 async function waitFor(check, label, timeout = 4000) {
   const started = Date.now()
