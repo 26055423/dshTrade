@@ -24,6 +24,24 @@ CREATE TABLE IF NOT EXISTS trades(
   raw TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_trades_closed ON trades(closed_utc DESC);
+CREATE TABLE IF NOT EXISTS deals(
+  deal_ticket TEXT PRIMARY KEY,
+  position_id TEXT NOT NULL DEFAULT '',
+  symbol TEXT NOT NULL DEFAULT '',
+  type INTEGER NOT NULL DEFAULT 0,
+  entry INTEGER NOT NULL DEFAULT 0,
+  volume REAL NOT NULL DEFAULT 0,
+  price REAL NOT NULL DEFAULT 0,
+  profit REAL NOT NULL DEFAULT 0,
+  commission REAL NOT NULL DEFAULT 0,
+  swap REAL NOT NULL DEFAULT 0,
+  fee REAL NOT NULL DEFAULT 0,
+  time_server INTEGER NOT NULL DEFAULT 0,
+  time_msc_server INTEGER NOT NULL DEFAULT 0,
+  order_ticket TEXT NOT NULL DEFAULT '',
+  raw TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_deals_position ON deals(position_id);
 CREATE TABLE IF NOT EXISTS bars(
   symbol TEXT NOT NULL,
   tf TEXT NOT NULL,
@@ -90,6 +108,7 @@ export class Store {
     add('contacts', 'ed25519', "TEXT NOT NULL DEFAULT ''")
     add('contacts', 'x25519', "TEXT NOT NULL DEFAULT ''")
     add('messages', 'data', "TEXT NOT NULL DEFAULT ''")
+    add('trades', 'time_basis', "TEXT NOT NULL DEFAULT 'broker_server'")
   }
 
   meta(key, fallback = '') {
@@ -131,6 +150,122 @@ export class Store {
       'SELECT time_utc, open, high, low, close, volume FROM bars WHERE symbol = ? AND tf = ? AND time_utc >= ? AND (? = 0 OR time_utc <= ?) ORDER BY time_utc DESC LIMIT ?',
     ).all(symbol, tf, from, to, to, Math.max(1, Math.min(5000, limit)))
     return rows.reverse().map((r) => [r.time_utc, r.open, r.high, r.low, r.close, r.volume])
+  }
+
+  /** deal 是 EA history 页里的原始成交；原始行全部保留，交易由 rebuildTrades 重建。 */
+  putDeals(rows = []) {
+    if (!Array.isArray(rows) || !rows.length) return 0
+    const stmt = this.db.prepare(
+      'INSERT INTO deals(deal_ticket, position_id, symbol, type, entry, volume, price, profit, commission, swap, fee, ' +
+      'time_server, time_msc_server, order_ticket, raw) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ' +
+      'ON CONFLICT(deal_ticket) DO UPDATE SET position_id=excluded.position_id, symbol=excluded.symbol, type=excluded.type, ' +
+      'entry=excluded.entry, volume=excluded.volume, price=excluded.price, profit=excluded.profit, ' +
+      'commission=excluded.commission, swap=excluded.swap, fee=excluded.fee, time_server=excluded.time_server, ' +
+      'time_msc_server=excluded.time_msc_server, order_ticket=excluded.order_ticket, raw=excluded.raw',
+    )
+    let n = 0
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      for (const row of rows) {
+        const ticket = String(row && row.deal_ticket || '')
+        if (!ticket) continue
+        stmt.run(
+          ticket,
+          String(row.position_id || ''),
+          String(row.symbol || ''),
+          Number(row.type || 0),
+          Number(row.entry || 0),
+          Number(row.volume || 0),
+          Number(row.price || 0),
+          Number(row.profit || 0),
+          Number(row.commission || 0),
+          Number(row.swap || 0),
+          Number(row.fee || 0),
+          Math.trunc(Number(row.time_server || 0)),
+          Math.trunc(Number(row.time_msc_server || 0)),
+          String(row.order_ticket || ''),
+          JSON.stringify(row),
+        )
+        n += 1
+      }
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+    return n
+  }
+
+  /**
+   * 用本地 deal 重建「已平仓交易」读模型。
+   *
+   * entry 0 视为开仓，其余（1=平仓、2=反手、3=对平）都按平仓腿计入；价格按手数加权，
+   * 时间取券商服务器秒（EA 的 time_basis 就是 broker_server），不做时区猜测。
+   * 只有既开又平的头寸才会成为一笔历史，未平仓的留给了持仓面板。
+   */
+  rebuildTrades(accountKey = '') {
+    const rows = this.db.prepare(
+      'SELECT position_id, symbol, type, entry, volume, price, profit, commission, swap, fee, time_server FROM deals ORDER BY time_msc_server ASC',
+    ).all()
+    const groups = new Map()
+    for (const row of rows) {
+      const key = String(row.position_id || '')
+      if (!key) continue
+      let group = groups.get(key)
+      if (!group) {
+        group = { key, symbol: row.symbol, side: row.type === 0 ? 'buy' : 'sell', opens: [], closes: [], opened: 0, closed: 0, profit: 0 }
+        groups.set(key, group)
+      }
+      if (!group.symbol) group.symbol = row.symbol
+      group.profit += Number(row.profit || 0) + Number(row.commission || 0) + Number(row.swap || 0) + Number(row.fee || 0)
+      if (Number(row.entry) === 0) {
+        group.opens.push(row)
+        group.opened = group.opened ? Math.min(group.opened, row.time_server) : row.time_server
+      } else {
+        group.closes.push(row)
+        group.closed = Math.max(group.closed, row.time_server)
+      }
+    }
+
+    const stmt = this.db.prepare(
+      'INSERT INTO trades(ticket, account_key, symbol, side, volume, open_price, close_price, opened_utc, closed_utc, profit, raw, time_basis) ' +
+      'VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(ticket) DO UPDATE SET account_key=excluded.account_key, symbol=excluded.symbol, ' +
+      'side=excluded.side, volume=excluded.volume, open_price=excluded.open_price, close_price=excluded.close_price, ' +
+      'opened_utc=excluded.opened_utc, closed_utc=excluded.closed_utc, profit=excluded.profit, raw=excluded.raw, time_basis=excluded.time_basis',
+    )
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      this.db.exec('DELETE FROM trades')
+      let n = 0
+      for (const group of groups.values()) {
+        if (!group.opens.length || !group.closes.length) continue
+        const openVolume = group.opens.reduce((sum, row) => sum + Number(row.volume || 0), 0)
+        const closeVolume = group.closes.reduce((sum, row) => sum + Number(row.volume || 0), 0)
+        const volume = openVolume || closeVolume
+        const openPrice = weighted(group.opens)
+        const closePrice = weighted(group.closes)
+        stmt.run(
+          group.key, String(accountKey), String(group.symbol), group.side,
+          Number(volume.toFixed(4)), openPrice, closePrice,
+          Math.trunc(group.opened), Math.trunc(group.closed), Number(group.profit.toFixed(2)),
+          JSON.stringify({ deals: group.opens.length + group.closes.length }),
+          'broker_server',
+        )
+        n += 1
+      }
+      this.db.exec('COMMIT')
+      return n
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  trade(ticket) {
+    const row = this.db.prepare(
+      'SELECT ticket, symbol, side, volume, open_price, close_price, opened_utc, closed_utc, profit, time_basis FROM trades WHERE ticket = ?',
+    ).get(String(ticket))
+    return row || null
   }
 
   upsertTrade(t) {
@@ -232,6 +367,7 @@ export class Store {
     const one = (sql) => this.db.prepare(sql).get().n
     return {
       trades: one('SELECT count(*) AS n FROM trades'),
+      deals: one('SELECT count(*) AS n FROM deals'),
       bars: one('SELECT count(*) AS n FROM bars'),
       notes: one('SELECT count(*) AS n FROM notes'),
       messages: one('SELECT count(*) AS n FROM messages'),
@@ -246,4 +382,16 @@ export class Store {
 
 function safeJson(text, fallback) {
   try { return JSON.parse(text) } catch { return fallback }
+}
+
+function weighted(rows) {
+  let volume = 0
+  let cost = 0
+  for (const row of rows) {
+    const size = Number(row.volume || 0)
+    if (!Number.isFinite(size) || size <= 0) continue
+    volume += size
+    cost += size * Number(row.price || 0)
+  }
+  return volume > 0 ? Number((cost / volume).toFixed(6)) : 0
 }

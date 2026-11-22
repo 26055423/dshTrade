@@ -61,6 +61,23 @@ const notes = await request('GET', '/dshtrade/api/notes')
 assert.ok(notes.notes.some((note) => note.body === '等回调确认再入场'))
 assert.equal(notes.notes[0].ticket, '700001')
 
+const started = await request('POST', '/dshtrade/api/history', {})
+assert.equal(started.ok, true)
+assert.equal(started.range.to > started.range.from, true)
+await waitFor(() => ea.snapshot().history.active === false && ea.snapshot().history.pages === 2)
+const status = await request('GET', '/dshtrade/api/history')
+assert.equal(status.history.error, '')
+assert.equal(status.history.trades, 2)
+
+const linked = await request('GET', '/dshtrade/api/notes')
+const linkedNote = linked.notes.find((note) => note.body === '等回调确认再入场')
+assert.equal(linkedNote.trade.ticket, '700001')
+assert.equal(linkedNote.trade.symbol, 'XAUUSD')
+assert.equal(linkedNote.trade.profit, 12.3)
+
+const trades = await request('GET', '/dshtrade/api/trades')
+assert.equal(trades.trades.length, 2)
+
 const badOrigin = await request('POST', '/dshtrade/api/command', { action: 'market', side: 'buy', volume: 0.01 }, 'http://evil.invalid')
 assert.equal(badOrigin.status, 403)
 
@@ -72,7 +89,7 @@ ea.stop()
 store.close()
 await fake.close()
 rmSync(dir, { recursive: true, force: true })
-console.log('routes ok: state/身份/下单/笔记/来源校验/参数校验')
+console.log('routes ok: state/身份/下单/笔记/历史同步/笔记关联成交/来源校验/参数校验')
 
 async function request(method, pathname, body, requestOrigin = origin) {
   const headers = { 'Content-Type': 'application/json' }

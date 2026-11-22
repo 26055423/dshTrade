@@ -12,7 +12,9 @@
 | GET | `/dshtrade/api/health` | 存活与相位 |
 | GET | `/dshtrade/api/trades?from&to&symbol&limit` | 本地成交，按平仓时间倒序 |
 | GET | `/dshtrade/api/bars?symbol&tf&from&to&limit` | 本地已收盘 K 线 |
-| GET | `/dshtrade/api/notes?limit` | 本地笔记 |
+| GET | `/dshtrade/api/notes?limit` | 本地笔记；带 `trade` 字段时是关联到的本地成交摘要 |
+| GET | `/dshtrade/api/history` | 当前历史同步进度 `{active,from,to,pages,deals,trades,through,hasMore,error}` |
+| POST | `/dshtrade/api/history` | `{from?,to?,limit?}`，向 EA 分页拉券商历史（缺省近 90 天） |
 | GET | `/dshtrade/api/commands?limit` | 本机指令记录 |
 | POST | `/dshtrade/api/pair` | `{code:"8位数字"}`，转发给 EA |
 | POST | `/dshtrade/api/bars` | `{tf,limit}`，向 EA 请求历史 K 线 |
@@ -56,8 +58,20 @@ Host 在发送前检查：EA 已连接、`trade_enabled`、`capabilities` 包含
 - 结果写入本地 `commands` 表，返回给界面。
 - `expires_at_ms` 为当前时间 +10 秒，EA 拒绝过期指令。
 
-## 2. EA 连接
+## 5. 本地成交历史
 
+Host 向 EA 发 `{"type":"history","request_id":"h…","from":秒,"to":秒,"cursor":"","limit":100}`，
+EA 回 `{"type":"history","deals":[…],"next_cursor":"…","has_more":true,"through_server":…,"errors":[]}`。
+
+- `from`/`to` 是**券商服务器秒**；缺省区间取 EA 快照的 `server_time_ms` 前后（近 90 天到明天），不做时区猜测。
+- 分页由 EA 驱动：Host 一路取到 `has_more` 为假；`HISTORY_BUSY` 时 400ms 后重发同一页。
+- 原始 deal 全部落 `deals` 表（按 `deal_ticket` 幂等），交易是读模型：
+  `trades` 由 `store.rebuildTrades()` 从 deal 重建 —— `entry=0` 记开仓腿，其余按平仓腿，
+  价格按手数加权，盈亏含手续费/库存费/费用，只有既开又平的头寸才成为一笔历史。
+- 重建时整表替换：`trades` 永远是 `deals` 的派生结果，不手工编辑。
+- 时间存券商服务器秒（`trades.time_basis='broker_server'`），和旧站一致；界面只按原值显示，不再加减偏移。
+
+## 2. EA 连接
 - 端点：`ws://127.0.0.1:18765/ws`，子协议 `tongpin-local.v1`。
 - 握手必须带 `Origin`，值取插件配置 `eaOrigin`（缺省为 DSH 页面地址）。
 - EA 默认同时接受两类来源：精确的 `InpAllowedOrigin`（HTTPS 网站），以及任意回环 `http://127.0.0.1:<端口>` / `http://localhost:<端口>`；后者由 `InpAllowLocalOrigin` 控制，关闭后只认网站来源。

@@ -68,6 +68,33 @@ export function startFakeEa({ port = 18799, origin = 'http://127.0.0.1:56162', c
         send(socket, { type: 'bars', request_id: message.request_id, symbol: message.symbol, tf: message.tf, bars: rows, ...identity })
         return
       }
+      if (message.type === 'history') {
+        // 两页：第一页一个完整头寸，第二页再一个；够验证分页游标与重建逻辑。
+        const base = 1700000000
+        const pages = {
+          '': {
+            deals: [
+              deal('900001', '700001', 0, 0, 2400, 0, base + 10),
+              deal('900002', '700001', 1, 1, 2412.5, 12.5, base + 3610),
+            ],
+            next_cursor: 'cursor-1',
+            has_more: true,
+            through_server: base + 86399,
+          },
+          'cursor-1': {
+            deals: [
+              deal('900003', '700002', 1, 0, 2420, 0, base + 86400),
+              deal('900004', '700002', 1, 1, 2415.5, -4.5, base + 90000),
+            ],
+            next_cursor: '',
+            has_more: false,
+            through_server: base + 172799,
+          },
+        }
+        const page = pages[String(message.cursor || '')] || pages['']
+        send(socket, { type: 'history', request_id: message.request_id, range: { from_server: message.from, to_server: message.to }, ...page, errors: [], time_basis: 'broker_server', server_time_ms: Date.now(), ...identity })
+        return
+      }
       if (message.type === 'ping') send(socket, { type: 'pong', server_time_ms: Date.now() })
       if (message.type === 'command') {
         send(socket, {
@@ -88,6 +115,15 @@ export function startFakeEa({ port = 18799, origin = 'http://127.0.0.1:56162', c
       sockets.clear()
       server.close(resolve)
     }),
+  }
+}
+
+function deal(dealTicket, positionId, type, entry, price, profit, timeServer) {
+  return {
+    deal_ticket: dealTicket, position_id: positionId, symbol: 'XAUUSD', type, entry,
+    volume: 0.01, price, profit, commission: -0.1, swap: 0, fee: 0,
+    time_server: timeServer, time_msc_server: timeServer * 1000,
+    order_ticket: dealTicket, magic: '26055423', reason: 0, comment: '', external_id: '',
   }
 }
 

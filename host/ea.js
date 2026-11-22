@@ -32,6 +32,7 @@ export class EaClient {
       serverTimeMs: 0,
       updated: 0,
       revision: 0,
+      history: { active: false, from: 0, to: 0, pages: 0, deals: 0, trades: 0, through: 0, hasMore: false, error: '' },
     }
     this.listeners = new Set()
     this.socket = null
@@ -43,6 +44,8 @@ export class EaClient {
     this.lastMessage = 0
     this.timer = null
     this.retry = null
+    this.historyJob = null
+    this.historyTimer = null
     this.pending = new Map()
   }
 
@@ -132,6 +135,12 @@ export class EaClient {
   destroy() {
     clearInterval(this.timer)
     this.timer = null
+    clearTimeout(this.historyTimer)
+    this.historyTimer = null
+    if (this.historyJob) {
+      this.historyJob = null
+      this.patch({ history: { ...this.state.history, active: false, hasMore: false, error: '连接已结束，历史同步中断；重新连接后可再点同步。' } })
+    }
     this.failPending('连接已结束，指令结果未知；不会自动重发。')
     const socket = this.socket
     this.socket = null
@@ -283,6 +292,10 @@ export class EaClient {
       try { this.store?.putBars(String(message.symbol || this.symbol), tf, rows) } catch (error) { this.log('store bars failed', error) }
       return
     }
+    if (type === 'history') {
+      this.onHistory(message)
+      return
+    }
     if (type === 'command_result') {
       const id = String(message.command_id || '')
       const entry = this.pending.get(id)
@@ -295,8 +308,95 @@ export class EaClient {
       return
     }
     if (type === 'error') {
+      const code = String(message.code || '')
+      // 券商历史导出与 K 线共用一个作业槽；忙的时候等一会儿重发同一页，不丢进度。
+      if (code === 'HISTORY_BUSY' && this.historyJob) {
+        this.scheduleHistoryPage(400)
+        return
+      }
+      if (this.historyJob && /HISTORY_/.test(code)) {
+        this.finishHistory(String(message.error || code))
+        return
+      }
       this.patch({ error: String(message.error || message.code || 'EA 返回错误') })
     }
+  }
+
+  /**
+   * 向 EA 要一段券商历史。分页是 EA 驱动的：每页回 has_more / next_cursor，
+   * 这里一路取到没有下一页为止，原始 deal 落库后再重建「已平仓交易」。
+   */
+  requestHistory({ from, to, limit = 100 } = {}) {
+    if (!this.socketOpen || !this.state.identity) throw new Error('本机 EA 未连接，无法同步历史')
+    if (this.historyJob) throw new Error('历史同步已在进行中')
+    const nowSec = Math.floor((Number(this.state.serverTimeMs) || Date.now()) / 1000)
+    const fromSec = Math.trunc(Number(from) || nowSec - 90 * 86400)
+    const toSec = Math.trunc(Number(to) || nowSec + 86400)
+    if (!(fromSec >= 1) || toSec < fromSec) throw new Error('历史区间不正确')
+    this.historyJob = { from: fromSec, to: toSec, cursor: '', limit: Math.max(1, Math.min(100, Math.trunc(limit) || 100)), pages: 0, deals: 0, trades: 0, requestId: '' }
+    this.patch({ history: { ...this.state.history, active: true, from: fromSec, to: toSec, pages: 0, deals: 0, trades: 0, through: 0, hasMore: true, error: '' } })
+    this.sendHistoryPage()
+    return { from: fromSec, to: toSec }
+  }
+
+  sendHistoryPage() {
+    const job = this.historyJob
+    if (!job || this.stopping) return
+    if (job.pages >= 500) { this.finishHistory('历史页数过多，已停止；再次同步会从最后一页继续。'); return }
+    job.requestId = 'h' + randomBytes(6).toString('hex')
+    this.send({ type: 'history', request_id: job.requestId, from: job.from, to: job.to, cursor: job.cursor, limit: job.limit })
+  }
+
+  scheduleHistoryPage(delay) {
+    clearTimeout(this.historyTimer)
+    this.historyTimer = setTimeout(() => {
+      this.historyTimer = null
+      this.sendHistoryPage()
+    }, delay)
+  }
+
+  onHistory(message) {
+    const job = this.historyJob
+    if (!job || String(message.request_id || '') !== job.requestId) return
+    const deals = Array.isArray(message.deals) ? message.deals : []
+    let stored = 0
+    try { stored = this.store ? this.store.putDeals(deals) : 0 } catch (error) { this.log('store deals failed', error) }
+    let trades = 0
+    try { trades = this.store ? this.store.rebuildTrades(String(this.state.identity && this.state.identity.account_id || '')) : 0 } catch (error) { this.log('rebuild trades failed', error) }
+    job.pages += 1
+    job.deals += stored
+    job.trades = trades
+    job.cursor = String(message.next_cursor || '')
+    const hasMore = message.has_more === true && Boolean(job.cursor)
+    const errors = Array.isArray(message.errors) ? message.errors : []
+    const error = errors.length ? String(errors[0] && (errors[0].error || errors[0].code) || errors[0]) : ''
+    this.patch({
+      history: {
+        active: hasMore && !error, from: job.from, to: job.to, pages: job.pages, deals: job.deals,
+        trades, through: Number(message.through_server || 0), hasMore: hasMore && !error, error,
+      },
+    })
+    if (error) { this.finishHistory(error); return }
+    if (hasMore) { this.scheduleHistoryPage(40); return }
+    this.finishHistory('')
+  }
+
+  finishHistory(error) {
+    clearTimeout(this.historyTimer)
+    this.historyTimer = null
+    const job = this.historyJob
+    this.historyJob = null
+    this.patch({
+      history: {
+        ...this.state.history,
+        active: false,
+        pages: job ? job.pages : this.state.history.pages,
+        deals: job ? job.deals : this.state.history.deals,
+        trades: job ? job.trades : this.state.history.trades,
+        hasMore: false,
+        error,
+      },
+    })
   }
 
   pair(code) {

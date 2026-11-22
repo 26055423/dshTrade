@@ -344,12 +344,17 @@ window.__ModuleLoader__.load({
       const [noteBody, setNoteBody] = useState('')
       const [noteTicket, setNoteTicket] = useState('')
       const [noteStatus, setNoteStatus] = useState('')
+      const [trades, setTrades] = useState([])
+      const [historyStatus, setHistoryStatus] = useState('')
+
+      const loadTrades = () => call('/trades?limit=20').then((reply) => setTrades(reply.trades || [])).catch(() => {})
 
       useEffect(() => {
         if (!open) return undefined
         let alive = true
         call('/im').then((reply) => { if (alive) setContacts(reply.contacts || []) }).catch(() => {})
         call('/notes?limit=20').then((reply) => { if (alive) setNotes(reply.notes || []) }).catch(() => {})
+        loadTrades()
         return () => { alive = false }
       }, [open])
 
@@ -422,6 +427,37 @@ window.__ModuleLoader__.load({
           setNotes(reply.notes || [])
         } catch (cause) {
           setNoteStatus(String(cause && cause.message ? cause.message : cause))
+        }
+      }
+
+      /** 笔记列表前缀：能关联到本地成交就显示品种/方向/盈亏，否则退回单号。 */
+      const noteLabel = (note) => {
+        if (note.trade) {
+          return note.trade.symbol + ' ' + (note.trade.side === 'buy' ? t('buy') : t('sell')) + ' ' + Number(note.trade.profit || 0).toFixed(2) + ' · '
+        }
+        return note.ticket ? '#' + note.ticket + ' · ' : ''
+      }
+
+      const syncHistory = async () => {
+        setHistoryStatus(t('syncingHistory'))
+        try {
+          await call('/history', { method: 'POST', body: JSON.stringify({}) })
+          const started = Date.now()
+          while (Date.now() - started < 30000) {
+            await new Promise((resolve) => setTimeout(resolve, 400))
+            const reply = await call('/history')
+            const job = reply.history || {}
+            if (!job.active) {
+              setHistoryStatus(job.error ? job.error : t('historyDone') + ' · ' + (job.trades || 0) + t('tradesUnit') + ' / ' + (job.deals || 0) + t('dealsUnit'))
+              break
+            }
+          }
+          await loadTrades()
+          const reply = await call('/notes?limit=20')
+          setNotes(reply.notes || [])
+          refresh()
+        } catch (cause) {
+          setHistoryStatus(String(cause && cause.message ? cause.message : cause))
         }
       }
 
@@ -499,13 +535,33 @@ window.__ModuleLoader__.load({
                 shareStatus ? h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, shareStatus) : null),
 
               h('div', { style: { display: 'grid', gap: 6, padding: 10, borderRadius: 10, background: 'var(--dsw-alias-bg-layer-1)', border: '1px solid var(--dsw-alias-border-l1)' } },
+                h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+                  h('div', { style: { flex: 1, fontSize: 12, fontWeight: 600 } }, t('history')),
+                  h('button', {
+                    type: 'button', onClick: syncHistory, disabled: !identity,
+                    style: { ...buttonStyle, padding: '1px 6px', fontSize: 10, opacity: identity ? 1 : 0.5 },
+                  }, t('syncHistory'))),
+                trades.length ? h('div', { style: { display: 'grid', gap: 3 } },
+                  trades.slice(0, 6).map((trade) => h('button', {
+                    key: trade.ticket, type: 'button',
+                    onClick: () => { setNoteTicket(trade.ticket); setNoteStatus('') },
+                    style: { ...buttonStyle, display: 'flex', justifyContent: 'space-between', gap: 6, padding: '2px 6px', fontSize: 10, textAlign: 'left' },
+                  },
+                    h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                      '#' + trade.ticket + ' ' + trade.symbol + ' ' + (trade.side === 'buy' ? t('buy') : t('sell')) + ' ' + trade.volume),
+                    h('span', { style: { color: Number(trade.profit) >= 0 ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)', fontVariantNumeric: 'tabular-nums' } },
+                      Number(trade.profit || 0).toFixed(2)))))
+                  : h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, t('noTrades')),
+                historyStatus ? h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, historyStatus) : null),
+
+              h('div', { style: { display: 'grid', gap: 6, padding: 10, borderRadius: 10, background: 'var(--dsw-alias-bg-layer-1)', border: '1px solid var(--dsw-alias-border-l1)' } },
                 h('div', { style: { fontSize: 12, fontWeight: 600 } }, t('notes')),
                 h('div', { style: { display: 'grid', gap: 3 } },
                   notes.slice(0, 4).map((note) => h('button', {
                     key: note.id, type: 'button',
-                    onClick: () => { setNoteBody(note.body); setNoteTicket(note.ticket || '') },
+                    onClick: () => { setNoteBody(note.body); setNoteTicket(note.ticket || ''); setNoteStatus('') },
                     style: { ...buttonStyle, fontSize: 10, textAlign: 'left', padding: '2px 6px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-                  }, (note.ticket ? '#' + note.ticket + ' ' : '') + String(note.body).slice(0, 40)))),
+                  }, noteLabel(note) + String(note.body).slice(0, 40)))),
                 h('input', { value: noteTicket, onChange: (event) => setNoteTicket(event.target.value), placeholder: t('noteTicket'), style: inputStyle }),
                 h('textarea', {
                   value: noteBody, onChange: (event) => setNoteBody(event.target.value), placeholder: t('notePlaceholder'), rows: 3,
@@ -915,6 +971,13 @@ window.__ModuleLoader__.load({
       notePlaceholder: '这单当时的判断、情绪、执行…',
       saveNote: '保存笔记',
       noteSaved: '已保存到本机',
+      history: '成交历史',
+      syncHistory: '同步历史',
+      syncingHistory: '同步中…',
+      historyDone: '已同步',
+      tradesUnit: ' 笔',
+      dealsUnit: ' 条成交',
+      noTrades: '还没有本地成交；连上 EA 后点「同步历史」。',
     }
 
     const EN = {
@@ -1001,6 +1064,13 @@ window.__ModuleLoader__.load({
       notePlaceholder: 'Your read, emotion and execution at that moment…',
       saveNote: 'Save note',
       noteSaved: 'Saved locally',
+      history: 'Trade history',
+      syncHistory: 'Sync history',
+      syncingHistory: 'Syncing…',
+      historyDone: 'Synced',
+      tradesUnit: ' trades',
+      dealsUnit: ' deals',
+      noTrades: 'No local trades yet; connect the EA and press Sync history.',
     }
 
     return {

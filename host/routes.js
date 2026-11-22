@@ -66,7 +66,17 @@ async function handle(req, res, deps) {
       return write(res, 200, { ok: true, commands: deps.store.commands(Number(url.searchParams.get('limit') || 50)) })
     }
     if (method === 'GET' && route === '/notes') {
-      return write(res, 200, { ok: true, notes: deps.store.notes(Number(url.searchParams.get('limit') || 100)) })
+      return write(res, 200, { ok: true, notes: notesWithTrades(deps.store, Number(url.searchParams.get('limit') || 100)) })
+    }
+    if (method === 'GET' && route === '/history') {
+      return write(res, 200, { ok: true, history: deps.ea.snapshot().history || null })
+    }
+    if (method === 'POST' && route === '/history') {
+      const body = await readJson(req)
+      const state = deps.ea.snapshot()
+      if (state.phase !== 'connected') throw httpError('本机 EA 未连接', 409)
+      const range = deps.ea.requestHistory({ from: body.from, to: body.to, limit: body.limit })
+      return write(res, 200, { ok: true, range, history: deps.ea.snapshot().history })
     }
     if (method === 'POST' && route === '/command') {
       const body = await readJson(req)
@@ -134,7 +144,13 @@ async function handle(req, res, deps) {
   }
 }
 
-function trusted(req, origin) {  const given = req.headers.origin
+/** 笔记按单号挂上本地成交摘要：界面不用再多跑一次请求，也不会去猜没有的交易。 */
+function notesWithTrades(store, limit) {
+  return store.notes(limit).map((note) => ({ ...note, trade: note.ticket ? store.trade(note.ticket) : null }))
+}
+
+function trusted(req, origin) {
+  const given = req.headers.origin
   if (!given) return true
   try {
     const a = new URL(given)
