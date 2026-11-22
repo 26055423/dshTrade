@@ -34,7 +34,10 @@ function fakeRequire(name) {
 
 const ctx = {
   locale: {
-    register(ns, dicts) { locales.push({ ns, dicts }) },
+    register(ns, dicts) {
+      if (locales.some((entry) => entry.ns === ns)) throw new Error(`locale namespace "${ns}" already has locale "zh"`)
+      locales.push({ ns, dicts })
+    },
     bind: () => (key) => key,
   },
   slots: {
@@ -58,4 +61,11 @@ assert.equal(registered.find((spec) => spec.name === 'settings.section').id, 'ds
 assert.equal(locales.length, 1)
 assert.ok(locales[0].dicts.zh.title)
 assert.ok(locales[0].dicts.en.title)
-console.log('client ok: bundle 解析 + 四个插槽注册 + 中英文本地化')
+
+// 同一页面里插件可能被重复 apply（开关插件 / HMR）：语言包撞名不能把整次装配打断。
+registered.length = 0
+injected.length = 0
+assert.doesNotThrow(() => factoryResult.apply(ctx), '重复 apply 不应抛错')
+assert.equal(registered.length, 4, '重复 apply 仍然注册四个插槽')
+assert.equal(locales.length, 1, '语言包仍然只有一份')
+console.log('client ok: bundle 解析 + 四个插槽注册 + 中英文本地化 + 重复 apply 幂等')

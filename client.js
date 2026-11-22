@@ -1080,7 +1080,13 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots', 'locale'],
       apply(ctx) {
-        ctx.locale.register('dshtrade', { zh: ZH, en: EN })
+        try {
+          ctx.locale.register('dshtrade', { zh: ZH, en: EN })
+        } catch (error) {
+          // 同一页面里插件被重复 apply（例如开关插件、HMR）时，语言包已经在了。
+          // 沿用已有的一份；只有其它错误才继续往上抛。
+          if (!/already has locale/i.test(String(error && error.message))) throw error
+        }
         const t = ctx.locale.bind('dshtrade')
 
         ctx.slots.inject('settings.section', () => ctx.slots.register({
