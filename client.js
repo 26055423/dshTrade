@@ -340,11 +340,16 @@ window.__ModuleLoader__.load({
       const [shareTo, setShareTo] = useState('')
       const [shareNote, setShareNote] = useState('')
       const [shareStatus, setShareStatus] = useState('')
+      const [notes, setNotes] = useState([])
+      const [noteBody, setNoteBody] = useState('')
+      const [noteTicket, setNoteTicket] = useState('')
+      const [noteStatus, setNoteStatus] = useState('')
 
       useEffect(() => {
         if (!open) return undefined
         let alive = true
         call('/im').then((reply) => { if (alive) setContacts(reply.contacts || []) }).catch(() => {})
+        call('/notes?limit=20').then((reply) => { if (alive) setNotes(reply.notes || []) }).catch(() => {})
         return () => { alive = false }
       }, [open])
 
@@ -404,6 +409,19 @@ window.__ModuleLoader__.load({
           setShareNote('')
         } catch (cause) {
           setShareStatus(String(cause && cause.message ? cause.message : cause))
+        }
+      }
+
+      const saveNote = async () => {
+        if (!noteBody.trim()) return
+        try {
+          await call('/notes', { method: 'POST', body: JSON.stringify({ ticket: noteTicket.trim(), body: noteBody.trim(), tags: [] }) })
+          setNoteStatus(t('noteSaved'))
+          setNoteBody('')
+          const reply = await call('/notes?limit=20')
+          setNotes(reply.notes || [])
+        } catch (cause) {
+          setNoteStatus(String(cause && cause.message ? cause.message : cause))
         }
       }
 
@@ -478,7 +496,23 @@ window.__ModuleLoader__.load({
                   contacts.map((contact) => h('option', { key: contact.code, value: contact.code }, contact.alias || contact.code))),
                 h('input', { value: shareNote, onChange: (event) => setShareNote(event.target.value), placeholder: t('shareNote'), style: inputStyle }),
                 h('button', { type: 'button', onClick: share, disabled: !contacts.length, style: { ...buttonStyle, opacity: contacts.length ? 1 : 0.5 } }, t('shareAction')),
-                shareStatus ? h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, shareStatus) : null))))
+                shareStatus ? h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, shareStatus) : null),
+
+              h('div', { style: { display: 'grid', gap: 6, padding: 10, borderRadius: 10, background: 'var(--dsw-alias-bg-layer-1)', border: '1px solid var(--dsw-alias-border-l1)' } },
+                h('div', { style: { fontSize: 12, fontWeight: 600 } }, t('notes')),
+                h('div', { style: { display: 'grid', gap: 3 } },
+                  notes.slice(0, 4).map((note) => h('button', {
+                    key: note.id, type: 'button',
+                    onClick: () => { setNoteBody(note.body); setNoteTicket(note.ticket || '') },
+                    style: { ...buttonStyle, fontSize: 10, textAlign: 'left', padding: '2px 6px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+                  }, (note.ticket ? '#' + note.ticket + ' ' : '') + String(note.body).slice(0, 40)))),
+                h('input', { value: noteTicket, onChange: (event) => setNoteTicket(event.target.value), placeholder: t('noteTicket'), style: inputStyle }),
+                h('textarea', {
+                  value: noteBody, onChange: (event) => setNoteBody(event.target.value), placeholder: t('notePlaceholder'), rows: 3,
+                  style: { ...inputStyle, resize: 'vertical', fontFamily: 'inherit' },
+                }),
+                h('button', { type: 'button', onClick: saveNote, style: buttonStyle }, t('saveNote')),
+                noteStatus ? h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, noteStatus) : null))))
       )
     }
 
@@ -876,6 +910,11 @@ window.__ModuleLoader__.load({
       shareAction: '发送卡片',
       shared: '卡片已发送',
       noBars: '还没有 K 线，先等行情。',
+      notes: '复盘笔记',
+      noteTicket: '关联单号（可选）',
+      notePlaceholder: '这单当时的判断、情绪、执行…',
+      saveNote: '保存笔记',
+      noteSaved: '已保存到本机',
     }
 
     const EN = {
@@ -957,6 +996,11 @@ window.__ModuleLoader__.load({
       shareAction: 'Send card',
       shared: 'Card sent',
       noBars: 'No bars yet; wait for quotes.',
+      notes: 'Review notes',
+      noteTicket: 'Ticket (optional)',
+      notePlaceholder: 'Your read, emotion and execution at that moment…',
+      saveNote: 'Save note',
+      noteSaved: 'Saved locally',
     }
 
     return {

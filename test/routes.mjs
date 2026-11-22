@@ -55,6 +55,12 @@ assert.equal(order.result.order, '456')
 const after = await request('GET', '/dshtrade/api/state')
 assert.equal(after.counts.commands, 1)
 
+const saved = await request('POST', '/dshtrade/api/notes', { ticket: '700001', body: '等回调确认再入场', tags: ['入场时机'] })
+assert.equal(saved.ok, true)
+const notes = await request('GET', '/dshtrade/api/notes')
+assert.ok(notes.notes.some((note) => note.body === '等回调确认再入场'))
+assert.equal(notes.notes[0].ticket, '700001')
+
 const badOrigin = await request('POST', '/dshtrade/api/command', { action: 'market', side: 'buy', volume: 0.01 }, 'http://evil.invalid')
 assert.equal(badOrigin.status, 403)
 
@@ -66,7 +72,7 @@ ea.stop()
 store.close()
 await fake.close()
 rmSync(dir, { recursive: true, force: true })
-console.log('routes ok: state/身份/下单/来源校验/参数校验')
+console.log('routes ok: state/身份/下单/笔记/来源校验/参数校验')
 
 async function request(method, pathname, body, requestOrigin = origin) {
   const headers = { 'Content-Type': 'application/json' }
