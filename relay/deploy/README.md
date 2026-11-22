@@ -2,7 +2,21 @@
 
 中继是独立进程，和旧站 Tongpin 只共用一台机器与一个 HTTPS 入口，不读写它的代码和数据库。
 
-## 1. 建目录与用户
+## 1. 一条命令
+
+```bash
+scp relay/server.js relay/deploy/install.sh root@<服务器>:/tmp/
+ssh root@<服务器> "bash /tmp/install.sh /tmp/server.js sync-trade.top"
+```
+
+`install.sh` 会：建 `dshtrade` 用户和目录 → 装 systemd 单元并启动 → 自检 `127.0.0.1:8791/v1/health`
+→ 找到 `server_name sync-trade.top` 的站点配置，备份后在末尾插入 `location /relay/`
+→ `nginx -t` 失败就回滚 → reload nginx → 用 `https://sync-trade.top/relay/v1/health` 自检。
+幂等：重复跑只更新 `server.js` 并重启服务，已有 `location /relay/` 就跳过。
+
+## 2. 手工步骤（脚本不适用的环境）
+
+### 2.1 建目录与用户
 
 ```bash
 sudo useradd --system --home /opt/dshtrade-relay --shell /usr/sbin/nologin dshtrade
@@ -13,7 +27,7 @@ sudo chown -R dshtrade:dshtrade /opt/dshtrade-relay /var/lib/dshtrade
 
 `server.js` 零依赖，只要求 Node 22+（`node:sqlite`）。
 
-## 2. systemd
+## 3. systemd
 
 ```bash
 sudo cp dshtrade-relay.service /etc/systemd/system/dshtrade-relay.service
@@ -22,7 +36,7 @@ sudo systemctl enable --now dshtrade-relay
 curl -s http://127.0.0.1:8791/v1/health
 ```
 
-## 3. 反向代理
+## 4. 反向代理
 
 把 `nginx-relay.conf` 里的 `location /relay/` 放进现有 443 站点块，然后 `sudo nginx -t && sudo systemctl reload nginx`。
 
@@ -30,7 +44,7 @@ curl -s http://127.0.0.1:8791/v1/health
 curl -s https://<你的域名>/relay/v1/health
 ```
 
-## 4. 写进插件
+## 5. 写进插件
 
 `cordis.patch.yml` 或插件配置里：
 
