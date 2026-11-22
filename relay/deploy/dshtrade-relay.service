@@ -1,0 +1,25 @@
+[Unit]
+Description=dshTrade thin relay (ciphertext envelopes only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dshtrade
+Group=dshtrade
+WorkingDirectory=/opt/dshtrade-relay
+Environment=RELAY_HOST=127.0.0.1
+Environment=RELAY_PORT=8791
+Environment=RELAY_DB=/var/lib/dshtrade/relay.db
+Environment=RELAY_TTL=604800
+ExecStart=/usr/bin/node /opt/dshtrade-relay/server.js
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/dshtrade
+
+[Install]
+WantedBy=multi-user.target
