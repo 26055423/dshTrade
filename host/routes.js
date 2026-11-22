@@ -5,12 +5,12 @@
 const PREFIX = '/dshtrade/api'
 const MAX_BODY = 64 * 1024
 
-export function registerRoutes(ctx, { store, ea, identity, log = () => {} }) {
+export function registerRoutes(ctx, { store, ea, identity, im, log = () => {} }) {
   const origin = safeOrigin(ctx)
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: PREFIX,
-    handler: (req, res) => handle(req, res, { store, ea, identity, origin, log }).catch((error) => {
+    handler: (req, res) => handle(req, res, { store, ea, identity, im, origin, log }).catch((error) => {
       log('route failed', error)
       write(res, 500, { ok: false, error: '本机服务出错' })
     }),
@@ -39,6 +39,7 @@ async function handle(req, res, deps) {
         ok: true,
         ea: { ...rest, bars: Object.fromEntries(Object.entries(bars || {}).map(([tf, rows]) => [tf, rows.length])) },
         identity: deps.identity ? deps.identity.view() : null,
+        im: deps.im ? deps.im.status() : null,
         counts: deps.store.counts(),
       })
     }
@@ -93,6 +94,37 @@ async function handle(req, res, deps) {
       const body = await readJson(req)
       const saved = deps.store.saveNote({ id: body.id, ticket: body.ticket, body: body.body, tags: body.tags })
       return write(res, 200, { ok: true, note: saved })
+    }
+    if (method === 'GET' && route === '/im') {
+      return write(res, 200, { ok: true, im: deps.im ? deps.im.status() : null, contacts: deps.store.contacts() })
+    }
+    if (method === 'POST' && route === '/im/contact') {
+      if (!deps.im) throw httpError('尚未配置中继', 409)
+      const body = await readJson(req)
+      const contact = await deps.im.addContact(body.code, body.alias)
+      return write(res, 200, { ok: true, contact })
+    }
+    if (method === 'POST' && route === '/im/send') {
+      if (!deps.im) throw httpError('尚未配置中继', 409)
+      const body = await readJson(req)
+      const text = String(body.text || '').slice(0, 4000)
+      if (!text && !body.card) throw httpError('消息为空', 400)
+      const sent = await deps.im.send(String(body.to || ''), { kind: body.kind || 'text', text, card: body.card })
+      return write(res, 200, { ok: true, sent })
+    }
+    if (method === 'POST' && route === '/im/sync') {
+      if (!deps.im) throw httpError('尚未配置中继', 409)
+      const status = await deps.im.sync()
+      return write(res, 200, { ok: true, im: status })
+    }
+    if (method === 'GET' && route === '/im/messages') {
+      const peer = String(url.searchParams.get('peer') || '')
+      if (!peer) throw httpError('缺少会话对象', 400)
+      return write(res, 200, {
+        ok: true,
+        messages: deps.store.messages(peer, Number(url.searchParams.get('limit') || 100)),
+        unread: deps.store.unread(peer),
+      })
     }
     return write(res, 404, { ok: false, error: '接口不存在' })
   } catch (error) {

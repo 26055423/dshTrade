@@ -8,6 +8,7 @@ import path from 'node:path'
 import { Store } from './host/store.js'
 import { EaClient } from './host/ea.js'
 import { Identity } from './host/identity.js'
+import { Im } from './host/im.js'
 import { registerRoutes } from './host/routes.js'
 
 export const inject = ['webServer']
@@ -18,6 +19,7 @@ export function apply(ctx, config = {}) {
   const dataDir = String(config.dataDir || path.join(home, 'dshtrade'))
   const store = new Store(path.join(dataDir, 'dshtrade.db'))
   const identity = new Identity(store)
+  const im = new Im({ identity, store, relayUrl: String(config.relayUrl || ''), log })
   const ea = new EaClient({
     url: String(config.eaUrl || 'ws://127.0.0.1:18765/ws'),
     origin: String(config.eaOrigin || '').trim() || pageOrigin(ctx),
@@ -29,14 +31,16 @@ export function apply(ctx, config = {}) {
 
   ctx.effect(() => {
     ea.start()
+    im.start()
     return () => {
       ea.stop()
+      im.stop()
       store.close()
     }
   })
 
-  registerRoutes(ctx, { store, ea, identity, log })
-  log('ready', { dataDir, friendCode: identity.friendCode, ea: String(config.eaUrl || 'ws://127.0.0.1:18765/ws') })
+  registerRoutes(ctx, { store, ea, identity, im, log })
+  log('ready', { dataDir, friendCode: identity.friendCode, relay: Boolean(config.relayUrl), ea: String(config.eaUrl || 'ws://127.0.0.1:18765/ws') })
 }
 
 function pageOrigin(ctx) {

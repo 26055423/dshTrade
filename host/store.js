@@ -47,7 +47,9 @@ CREATE INDEX IF NOT EXISTS idx_notes_ticket ON notes(ticket);
 CREATE TABLE IF NOT EXISTS contacts(
   key TEXT PRIMARY KEY,
   alias TEXT NOT NULL DEFAULT '',
-  added INTEGER NOT NULL
+  added INTEGER NOT NULL,
+  ed25519 TEXT NOT NULL DEFAULT '',
+  x25519 TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS messages(
   id TEXT PRIMARY KEY,
@@ -76,6 +78,16 @@ export class Store {
     this.db.exec('PRAGMA journal_mode = WAL')
     this.db.exec('PRAGMA busy_timeout = 3000')
     this.db.exec(SCHEMA)
+    this.ensureColumns()
+  }
+
+  ensureColumns() {
+    const add = (table, column, ddl) => {
+      const columns = this.db.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name)
+      if (!columns.includes(column)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`)
+    }
+    add('contacts', 'ed25519', "TEXT NOT NULL DEFAULT ''")
+    add('contacts', 'x25519', "TEXT NOT NULL DEFAULT ''")
   }
 
   meta(key, fallback = '') {
@@ -175,6 +187,42 @@ export class Store {
     return this.db.prepare('SELECT id, action, payload, state, created FROM commands ORDER BY created DESC LIMIT ?')
       .all(Math.max(1, Math.min(200, limit)))
       .map((r) => ({ ...r, payload: safeJson(r.payload, {}) }))
+  }
+
+  upsertContact({ code, alias = '', ed25519 = '', x25519 = '' }) {
+    if (!code) return
+    this.db.prepare(
+      'INSERT INTO contacts(key, alias, added, ed25519, x25519) VALUES(?,?,?,?,?) ' +
+      'ON CONFLICT(key) DO UPDATE SET alias=excluded.alias, ed25519=excluded.ed25519, x25519=excluded.x25519',
+    ).run(String(code), String(alias), Date.now(), String(ed25519), String(x25519))
+  }
+
+  contact(code) {
+    const row = this.db.prepare('SELECT key, alias, added, ed25519, x25519 FROM contacts WHERE key = ?').get(String(code))
+    if (!row) return null
+    return { code: row.key, alias: row.alias, added: row.added, ed25519: row.ed25519, x25519: row.x25519 }
+  }
+
+  contacts() {
+    return this.db.prepare('SELECT key, alias, added, ed25519, x25519 FROM contacts ORDER BY added DESC')
+      .all()
+      .map((row) => ({ code: row.key, alias: row.alias, added: row.added, ed25519: row.ed25519, x25519: row.x25519 }))
+  }
+
+  addMessage({ id, peer, direction, kind = 'text', body = '', created = Date.now(), read = 0 }) {
+    if (!id || !peer) return
+    this.db.prepare(
+      'INSERT OR REPLACE INTO messages(id, peer, direction, kind, body, created, read) VALUES(?,?,?,?,?,?,?)',
+    ).run(String(id), String(peer), String(direction), String(kind), String(body), Number(created), Number(read))
+  }
+
+  messages(peer, limit = 100) {
+    return this.db.prepare('SELECT id, peer, direction, kind, body, created, read FROM messages WHERE peer = ? ORDER BY created ASC LIMIT ?')
+      .all(String(peer), Math.max(1, Math.min(500, limit)))
+  }
+
+  unread(peer) {
+    return this.db.prepare("SELECT count(*) AS n FROM messages WHERE peer = ? AND direction = 'in' AND read = 0").get(String(peer)).n
   }
 
   counts() {

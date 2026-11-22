@@ -63,14 +63,35 @@ Host 在发送前检查：EA 已连接、`trade_enabled`、`capabilities` 包含
 - 只读阶段发送：`ping`、`snapshot`、`bars`。不发送 `command`。
 - 本地令牌只存在 Host 内存，不落库、不进日志。
 
-## 3. 未来：中继信封
+## 3. 中继与 IM
 
-中继为独立项目，只转发密文，不参与业务字段。计划中的信封：
+中继是独立项目（`relay/server.js`），只转发密文。
+
+### 3.1 登记
+
+本机首次使用中继时登记两把公钥：
 
 ```json
-{"v":1,"id":"...","from":"<公钥指纹>","to":"<公钥指纹>","sent_at":0,"ttl":604800,"nonce":"...","box":"<base64>"}
+POST /v1/register
+{"code":"TP-XXXX-XXXX-XXXX-XXXX","ed25519":"<SPKI DER base64>","x25519":"<SPKI DER base64>","sig":"<base64url>"}
 ```
 
-- 密钥对在本机生成，私钥不出 Host。
-- 卡片消息的正文加密后放进 `box`，中继看不到图表、笔记或成交。
-- 中继只保存收件人信箱与投递时间，过期即删。
+`sig` 是 `dshtrade-register-v1\n<code>\n<ed25519>\n<x25519>` 的 Ed25519 签名；中继验签后返回一次性 Bearer 令牌。`GET /v1/keys?code=...` 供发件人取公钥。
+
+### 3.2 信封
+
+```json
+{
+  "v": 1, "id": "<uuid>", "from": "TP-...", "to": "TP-...",
+  "sent": 0, "ttl": 604800, "nonce": "<base64>", "box": "<base64>", "sig": "<base64url>"
+}
+```
+
+- `box` = AES-256-GCM(X25519 共享密钥, JSON 正文)，正文形如 `{"kind":"text|card","text":"...","card":{...},"at":0}`。
+- `sig` 是 `v\nid\nfrom\nto\nsent\nttl\nnonce\nbox` 的签名，中继入库前验证。
+- `POST /v1/send` 需 Bearer；`POST /v1/inbox` 取件；`POST /v1/ack` 删除。TTL 到期自动清理。
+- 中继不保存正文，也不保存公钥之外的任何个人资料。
+
+### 3.3 复盘卡片
+
+`kind:"card"` 的 `card` 由发件人本地生成，至少包含 `symbol`、`tf`、`note` 与当时窗口的 K 线摘要。收件人用本地画布渲染，不需要访问发件人的券商数据。卡片仍受同一信封加密与 TTL 约束。

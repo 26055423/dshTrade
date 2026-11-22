@@ -1,50 +1,44 @@
 /**
- * 本机身份：Ed25519 密钥对。没有账号、没有注册，好友码就是公钥指纹。
- * 私钥只在本机数据库里，用于给中继信封签名；不进入日志、不上传。
+ * 本机身份：Ed25519（签名）+ X25519（加密）两对密钥。没有账号、没有注册。
+ * 好友码是两把公钥的指纹；私钥只在本机数据库里，不上传、不写日志。
  */
-import { createHash, generateKeyPairSync, sign as signBytes, verify as verifyBytes } from 'node:crypto'
+import { friendCodeFrom, fingerprint, generateKeys, signText, verifyText } from './crypto.js'
 
-const PRIVATE_KEY = 'identity.private.pem'
-const PUBLIC_KEY = 'identity.public.pem'
+const KEY_RECORD = 'identity.keys.v1'
 
 export class Identity {
   constructor(store) {
     this.store = store
-    let privatePem = store.meta(PRIVATE_KEY, '')
-    let publicPem = store.meta(PUBLIC_KEY, '')
-    if (!privatePem || !publicPem) {
-      const pair = generateKeyPairSync('ed25519')
-      privatePem = pair.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString()
-      publicPem = pair.publicKey.export({ type: 'spki', format: 'pem' }).toString()
-      store.setMeta(PRIVATE_KEY, privatePem)
-      store.setMeta(PUBLIC_KEY, publicPem)
+    let keys = null
+    try { keys = JSON.parse(store.meta(KEY_RECORD, '') || 'null') } catch { keys = null }
+    if (!keys || !keys.ed25519 || !keys.x25519) {
+      keys = generateKeys()
+      store.setMeta(KEY_RECORD, JSON.stringify(keys))
     }
-    this.privatePem = privatePem
-    this.publicPem = publicPem
-    this.publicKey = Buffer.from(publicPem.replace(/-----[^-]+-----/g, '').replace(/\s+/g, ''), 'base64')
-    this.fingerprint = createHash('sha256').update(this.publicKey).digest('hex')
-    this.friendCode = formatFriendCode(this.fingerprint)
+    this.keys = keys
+    this.fingerprint = fingerprint({ ed25519: keys.ed25519.publicDer, x25519: keys.x25519.publicDer })
+    this.friendCode = friendCodeFrom(this.fingerprint)
   }
 
-  /** 供中继验证「消息确实来自持有私钥的一方」。 */
+  get edPrivate() { return this.keys.ed25519.privateKey }
+  get xPrivate() { return this.keys.x25519.privateKey }
+  get edPublic() { return this.keys.ed25519.publicDer }
+  get xPublic() { return this.keys.x25519.publicDer }
+
   sign(text) {
-    return signBytes(null, Buffer.from(String(text)), this.privatePem).toString('base64url')
+    return signText(this.edPrivate, text)
   }
 
-  static verify(text, signature, publicKeyPem) {
-    return verifyBytes(null, Buffer.from(String(text)), publicKeyPem, Buffer.from(String(signature), 'base64url'))
+  static verify(publicDer, text, signature) {
+    return verifyText(publicDer, text, signature)
   }
 
   view() {
     return {
       friend_code: this.friendCode,
       fingerprint: this.fingerprint,
-      public_key: this.publicKey.toString('base64'),
+      ed25519_public: this.edPublic,
+      x25519_public: this.xPublic,
     }
   }
-}
-
-function formatFriendCode(hex) {
-  const body = hex.slice(0, 16).toUpperCase()
-  return 'TP-' + body.match(/.{4}/g).join('-')
 }
