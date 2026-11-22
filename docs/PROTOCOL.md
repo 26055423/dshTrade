@@ -13,9 +13,11 @@
 | GET | `/dshtrade/api/trades?from&to&symbol&limit` | 本地成交，按平仓时间倒序 |
 | GET | `/dshtrade/api/bars?symbol&tf&from&to&limit` | 本地已收盘 K 线 |
 | GET | `/dshtrade/api/notes?limit` | 本地笔记 |
+| GET | `/dshtrade/api/commands?limit` | 本机指令记录 |
 | POST | `/dshtrade/api/pair` | `{code:"8位数字"}`，转发给 EA |
 | POST | `/dshtrade/api/bars` | `{tf,limit}`，向 EA 请求历史 K 线 |
 | POST | `/dshtrade/api/notes` | `{id?,ticket,body,tags}`，写入本地笔记 |
+| POST | `/dshtrade/api/command` | 市价/平仓/撤单/改单，见第 4 节 |
 
 写接口校验 `Origin` 与 `Sec-Fetch-Site`；`Origin` 必须等于 `ctx.webServer.getOrigin()`。
 
@@ -32,9 +34,27 @@
     "positions": [], "orders": [], "tick": null, "bars": {"1m": 500},
     "updated": 0
   },
-  "counts": {"trades":0,"bars":0,"notes":0,"messages":0}
+  "counts": {"trades":0,"bars":0,"notes":0,"messages":0},
+  "identity": {"friend_code":"TP-XXXX-XXXX-XXXX-XXXX","fingerprint":"...","public_key":"..."}
 }
 ```
+
+## 4. 交易命令
+
+`POST /dshtrade/api/command` 只放行协议允许的字段：
+
+| action | 字段 |
+|---|---|
+| `market` | `side=buy/sell`、`volume>0`、可选 `sl`、`tp`、`deviation`、`symbol` |
+| `close` | `position_ticket`、`volume`（0 = 全平） |
+| `cancel` | `order_ticket` |
+| `modify` | `ticket`、`sl`、`tp` |
+
+Host 在发送前检查：EA 已连接、`trade_enabled`、`capabilities` 包含该动作。EA 仍会做它自己的最终校验。
+
+- 每次确认生成一个 `command_id`，**只发送一次**；超时或断线返回 `state:"uncertain"`，不自动重发。
+- 结果写入本地 `commands` 表，返回给界面。
+- `expires_at_ms` 为当前时间 +10 秒，EA 拒绝过期指令。
 
 ## 2. EA 连接
 

@@ -58,6 +58,13 @@ CREATE TABLE IF NOT EXISTS messages(
   created INTEGER NOT NULL,
   read INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS commands(
+  id TEXT PRIMARY KEY,
+  action TEXT NOT NULL,
+  payload TEXT NOT NULL DEFAULT '{}',
+  state TEXT NOT NULL DEFAULT '',
+  created INTEGER NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_messages_peer ON messages(peer, created DESC);
 `
 
@@ -156,9 +163,29 @@ export class Store {
       .map((r) => ({ ...r, tags: safeJson(r.tags, []) }))
   }
 
+  logCommand({ id, action, payload = {}, state = '' }) {
+    if (!id) return
+    this.db.prepare(
+      'INSERT INTO commands(id, action, payload, state, created) VALUES(?,?,?,?,?) ' +
+      'ON CONFLICT(id) DO UPDATE SET state=excluded.state',
+    ).run(String(id), String(action), JSON.stringify(payload || {}), String(state), Date.now())
+  }
+
+  commands(limit = 50) {
+    return this.db.prepare('SELECT id, action, payload, state, created FROM commands ORDER BY created DESC LIMIT ?')
+      .all(Math.max(1, Math.min(200, limit)))
+      .map((r) => ({ ...r, payload: safeJson(r.payload, {}) }))
+  }
+
   counts() {
     const one = (sql) => this.db.prepare(sql).get().n
-    return { trades: one('SELECT count(*) AS n FROM trades'), bars: one('SELECT count(*) AS n FROM bars'), notes: one('SELECT count(*) AS n FROM notes'), messages: one('SELECT count(*) AS n FROM messages') }
+    return {
+      trades: one('SELECT count(*) AS n FROM trades'),
+      bars: one('SELECT count(*) AS n FROM bars'),
+      notes: one('SELECT count(*) AS n FROM notes'),
+      messages: one('SELECT count(*) AS n FROM messages'),
+      commands: one('SELECT count(*) AS n FROM commands'),
+    }
   }
 
   close() {

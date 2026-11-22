@@ -26,6 +26,13 @@ await waitFor(() => ea.snapshot().account && ea.snapshot().account.balance === 1
 await waitFor(() => ea.snapshot().positions.length === 1, '收到持仓')
 await waitFor(() => (ea.snapshot().bars['1m'] || []).length === 3, '收到 K 线')
 
+const order = await ea.command({ action: 'market', side: 'buy', volume: 0.01, sl: 0, tp: 0, deviation: 20 })
+assert.equal(order.state, 'completed')
+assert.equal(order.order, '456')
+assert.equal(order.ok, true)
+assert.equal(store.commands().length, 1)
+assert.equal(store.commands()[0].state, 'completed')
+
 const stored = store.bars('XAUUSD', '1m')
 assert.equal(stored.length, 3, 'K 线落本地库')
 assert.equal(stored[0][1], 2400)

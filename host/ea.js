@@ -5,7 +5,7 @@
  * 自己实现 RFC6455 握手与帧，因为浏览器之外的原生 WebSocket 不能设置 Origin，
  * 而 EA 要求 Origin 精确匹配。所有数据只在本机进程里流转。
  */
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { connect as netConnect } from 'node:net'
 
 const PROTOCOL = 'tongpin-local.v1'
@@ -43,6 +43,7 @@ export class EaClient {
     this.lastMessage = 0
     this.timer = null
     this.retry = null
+    this.pending = new Map()
   }
 
   subscribe(fn) {
@@ -130,6 +131,7 @@ export class EaClient {
   destroy() {
     clearInterval(this.timer)
     this.timer = null
+    this.failPending('连接已结束，指令结果未知；不会自动重发。')
     const socket = this.socket
     this.socket = null
     this.socketOpen = false
@@ -281,7 +283,14 @@ export class EaClient {
       return
     }
     if (type === 'command_result') {
-      this.log('command result', message)
+      const id = String(message.command_id || '')
+      const entry = this.pending.get(id)
+      if (entry) {
+        clearTimeout(entry.timer)
+        this.pending.delete(id)
+        try { this.store?.logCommand({ id, action: entry.action, payload: entry.payload, state: String(message.state || '') }) } catch {}
+        entry.resolve(message)
+      }
       return
     }
     if (type === 'error') {
@@ -299,6 +308,46 @@ export class EaClient {
   requestBars(tf, limit = 500) {
     if (!TRADE_TFS.has(tf)) return
     this.send({ type: 'bars', symbol: this.symbol, tf, limit, request_id: randomBytes(8).toString('hex') })
+  }
+
+  /**
+   * 发送交易命令。返回值永远是「结果」而不是异常：超时或断线一律是 uncertain。
+   * 调用方不得自动重发；重试必须复用同一个 command_id（由用户再次确认）。
+   */
+  command(payload, timeoutMs = 8000) {
+    if (!this.socketOpen || !this.state.identity || !this.token) {
+      return Promise.resolve({ command_id: String(payload?.command_id || ''), action: payload?.action, state: 'rejected', ok: false, error: '请先完成本机配对' })
+    }
+    const id = String(payload.command_id || randomUUID())
+    const action = String(payload.action || '')
+    const message = { type: 'command', command_id: id, action, expires_at_ms: Date.now() + 10000 }
+    for (const key of ['symbol', 'side', 'volume', 'sl', 'tp', 'deviation', 'position_ticket', 'order_ticket', 'ticket']) {
+      if (payload[key] !== undefined) message[key] = payload[key]
+    }
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id)
+        try { this.store?.logCommand({ id, action, payload, state: 'uncertain' }) } catch {}
+        resolve({ command_id: id, action, state: 'uncertain', ok: false, error: 'EA 未在时限内返回结果，执行状态未知；不会自动重发。' })
+      }, timeoutMs)
+      this.pending.set(id, { resolve, timer, action, payload })
+      try {
+        this.send(message)
+      } catch (error) {
+        clearTimeout(timer)
+        this.pending.delete(id)
+        resolve({ command_id: id, action, state: 'uncertain', ok: false, error: String(error?.message || error) })
+      }
+    })
+  }
+
+  failPending(error) {
+    for (const [id, entry] of this.pending) {
+      clearTimeout(entry.timer)
+      try { this.store?.logCommand({ id, action: entry.action, payload: entry.payload, state: 'uncertain' }) } catch {}
+      entry.resolve({ command_id: id, action: entry.action, state: 'uncertain', ok: false, error })
+    }
+    this.pending.clear()
   }
 
   auth() {

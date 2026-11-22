@@ -7,6 +7,7 @@
 import path from 'node:path'
 import { Store } from './host/store.js'
 import { EaClient } from './host/ea.js'
+import { Identity } from './host/identity.js'
 import { registerRoutes } from './host/routes.js'
 
 export const inject = ['webServer']
@@ -16,6 +17,7 @@ export function apply(ctx, config = {}) {
   const home = process.env.DSH_PROFILE_DIR || process.env.DSH_HOME || process.cwd()
   const dataDir = String(config.dataDir || path.join(home, 'dshtrade'))
   const store = new Store(path.join(dataDir, 'dshtrade.db'))
+  const identity = new Identity(store)
   const ea = new EaClient({
     url: String(config.eaUrl || 'ws://127.0.0.1:18765/ws'),
     origin: String(config.eaOrigin || '').trim() || pageOrigin(ctx),
@@ -33,8 +35,8 @@ export function apply(ctx, config = {}) {
     }
   })
 
-  registerRoutes(ctx, { store, ea, log })
-  log('ready', { dataDir, ea: String(config.eaUrl || 'ws://127.0.0.1:18765/ws') })
+  registerRoutes(ctx, { store, ea, identity, log })
+  log('ready', { dataDir, friendCode: identity.friendCode, ea: String(config.eaUrl || 'ws://127.0.0.1:18765/ws') })
 }
 
 function pageOrigin(ctx) {

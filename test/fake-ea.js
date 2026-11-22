@@ -31,7 +31,7 @@ export function startFakeEa({ port = 18799, origin = 'http://127.0.0.1:56162', c
       '', '',
     ].join('\r\n'))
 
-    const identity = { instance_id: 'fake-instance', account_id: '5001', server: 'Broker-Demo', epoch: 'epoch-1', symbol: 'XAUUSD', demo: true, read_only: true, trade_enabled: false, capabilities: [] }
+    const identity = { instance_id: 'fake-instance', account_id: '5001', server: 'Broker-Demo', epoch: 'epoch-1', symbol: 'XAUUSD', demo: true, read_only: false, trade_enabled: true, capabilities: ['market', 'close', 'cancel', 'modify'] }
     send(socket, { type: 'hello', protocol: 'tongpin-local', version: 1, ea_version: 'fake', instance_id: identity.instance_id, pairing_required: true })
 
     readFrames(socket, (text) => {
@@ -69,6 +69,13 @@ export function startFakeEa({ port = 18799, origin = 'http://127.0.0.1:56162', c
         return
       }
       if (message.type === 'ping') send(socket, { type: 'pong', server_time_ms: Date.now() })
+      if (message.type === 'command') {
+        send(socket, {
+          type: 'command_result', command_id: message.command_id, state: 'completed', ok: true, retcode: 10009,
+          order: '456', deal: '789', price: 2412.7, volume: message.volume || 0, partial: false, error: '',
+          server_time_ms: Date.now(), ...identity,
+        })
+      }
     })
   })
   server.listen(port, '127.0.0.1')
