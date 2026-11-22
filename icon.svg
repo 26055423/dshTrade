@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Tongpin local desk">
+  <rect width="64" height="64" rx="14" fill="#14181f"/>
+  <g stroke-linecap="round">
+    <line x1="18" y1="16" x2="18" y2="48" stroke="#3f4652" stroke-width="3"/>
+    <rect x="13" y="24" width="10" height="16" rx="2" fill="#e5484d"/>
+    <line x1="33" y1="12" x2="33" y2="52" stroke="#3f4652" stroke-width="3"/>
+    <rect x="28" y="18" width="10" height="18" rx="2" fill="#30a46c"/>
+    <line x1="48" y1="20" x2="48" y2="46" stroke="#3f4652" stroke-width="3"/>
+    <rect x="43" y="26" width="10" height="12" rx="2" fill="#30a46c"/>
+  </g>
+</svg>

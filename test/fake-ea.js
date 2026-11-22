@@ -1,0 +1,146 @@
+/**
+ * 假 EA：只实现本机协议里只读需要的部分，用来在没有 MT5 的机器上跑冒烟测试。
+ * 不是产品代码，不参与打包。
+ */
+import { createServer } from 'node:http'
+import { createHash } from 'node:crypto'
+
+const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
+
+export function startFakeEa({ port = 18799, origin = 'http://127.0.0.1:56162', code = '12345678' } = {}) {
+  const server = createServer((req, res) => {
+    res.writeHead(426, { 'Content-Type': 'text/plain' })
+    res.end('upgrade required')
+  })
+  const sockets = new Set()
+  server.on('upgrade', (req, socket) => {
+    sockets.add(socket)
+    socket.on('close', () => sockets.delete(socket))
+    if (req.headers.origin !== origin) {
+      socket.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n')
+      return
+    }
+    const key = req.headers['sec-websocket-key'] || ''
+    const accept = createHash('sha1').update(key + GUID).digest('base64')
+    socket.write([
+      'HTTP/1.1 101 Switching Protocols',
+      'Upgrade: websocket',
+      'Connection: Upgrade',
+      `Sec-WebSocket-Accept: ${accept}`,
+      'Sec-WebSocket-Protocol: tongpin-local.v1',
+      '', '',
+    ].join('\r\n'))
+
+    const identity = { instance_id: 'fake-instance', account_id: '5001', server: 'Broker-Demo', epoch: 'epoch-1', symbol: 'XAUUSD', demo: true, read_only: true, trade_enabled: false, capabilities: [] }
+    send(socket, { type: 'hello', protocol: 'tongpin-local', version: 1, ea_version: 'fake', instance_id: identity.instance_id, pairing_required: true })
+
+    readFrames(socket, (text) => {
+      let message
+      try { message = JSON.parse(text) } catch { return }
+      if (message.type === 'pair') {
+        if (String(message.code) !== code) {
+          send(socket, { type: 'error', code: 'PAIR_CODE', error: '配对码不正确' })
+          return
+        }
+        send(socket, { type: 'pair_pending', message: '等待本地确认' })
+        setTimeout(() => send(socket, { type: 'paired', token: 'f'.repeat(64), ...identity }), 20)
+        return
+      }
+      if (message.type === 'snapshot' || message.type === 'subscribe') {
+        send(socket, {
+          type: 'snapshot', ...identity,
+          account: { login: '5001', server: 'Broker-Demo', balance: 10000, equity: 10012.5, margin: 0, free_margin: 10012.5, profit: 12.5, currency: 'USD' },
+          positions: [{ ticket: '700001', symbol: 'XAUUSD', side: 'buy', volume: 0.01, price_open: 2400, sl: 0, tp: 0, profit: 12.5, magic: 26055423 }],
+          orders: [],
+          tick: { symbol: 'XAUUSD', bid: 2412.4, ask: 2412.7, time: 1700000000, time_msc: 1700000000000 },
+          bars: {},
+          server_time_ms: 1700000000000,
+        })
+        return
+      }
+      if (message.type === 'bars') {
+        const base = 1700000000
+        const rows = []
+        for (let i = 0; i < 3; i += 1) {
+          const t = base + i * 60
+          rows.push([t, 2400 + i, 2405 + i, 2398 + i, 2403 + i, 10 + i])
+        }
+        send(socket, { type: 'bars', request_id: message.request_id, symbol: message.symbol, tf: message.tf, bars: rows, ...identity })
+        return
+      }
+      if (message.type === 'ping') send(socket, { type: 'pong', server_time_ms: Date.now() })
+    })
+  })
+  server.listen(port, '127.0.0.1')
+  return {
+    port,
+    close: () => new Promise((resolve) => {
+      for (const socket of sockets) {
+        try { socket.destroy() } catch {}
+      }
+      sockets.clear()
+      server.close(resolve)
+    }),
+  }
+}
+
+function send(socket, value) {
+  const payload = Buffer.from(JSON.stringify(value))
+  let header
+  if (payload.length < 126) {
+    header = Buffer.from([0x81, payload.length])
+  } else if (payload.length < 65536) {
+    header = Buffer.alloc(4)
+    header[0] = 0x81
+    header[1] = 126
+    header.writeUInt16BE(payload.length, 2)
+  } else {
+    header = Buffer.alloc(10)
+    header[0] = 0x81
+    header[1] = 127
+    header.writeBigUInt64BE(BigInt(payload.length), 2)
+  }
+  try { socket.write(Buffer.concat([header, payload])) } catch {}
+}
+
+function readFrames(socket, onText) {
+  let buffer = Buffer.alloc(0)
+  socket.on('data', (chunk) => {
+    buffer = buffer.length ? Buffer.concat([buffer, chunk]) : chunk
+    while (buffer.length >= 2) {
+      const b0 = buffer[0]
+      const b1 = buffer[1]
+      const opcode = b0 & 0x0f
+      const masked = (b1 & 0x80) !== 0
+      let length = b1 & 0x7f
+      let offset = 2
+      if (length === 126) {
+        if (buffer.length < 4) return
+        length = buffer.readUInt16BE(2)
+        offset = 4
+      } else if (length === 127) {
+        if (buffer.length < 10) return
+        length = Number(buffer.readBigUInt64BE(2))
+        offset = 10
+      }
+      let mask = null
+      if (masked) {
+        if (buffer.length < offset + 4) return
+        mask = buffer.subarray(offset, offset + 4)
+        offset += 4
+      }
+      if (buffer.length < offset + length) return
+      let payload = buffer.subarray(offset, offset + length)
+      buffer = buffer.subarray(offset + length)
+      if (mask) {
+        const copy = Buffer.from(payload)
+        for (let i = 0; i < copy.length; i += 1) copy[i] ^= mask[i % 4]
+        payload = copy
+      }
+      if (opcode === 0x8) { socket.end(); return }
+      if (opcode === 0x9) { continue }
+      if (opcode === 0x1) onText(payload.toString('utf8'))
+    }
+  })
+  socket.on('error', () => {})
+}

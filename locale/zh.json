@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "同频本机交易台",
+    "description": "直连本机 MT5 EA：查看账户、持仓与 K 线，成交和笔记只存本机；不依赖云端站点。",
+    "detail": "docs/DETAIL.md"
+  }
+}

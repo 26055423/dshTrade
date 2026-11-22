@@ -1,0 +1,6 @@
+- insert:
+    - id: dshtrade
+      name: '@local/dshtrade'
+      config:
+        eaUrl: ws://127.0.0.1:18765/ws
+        symbol: XAUUSD

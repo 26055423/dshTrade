@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Tongpin local desk",
+    "description": "Connects directly to the local MT5 EA for account, positions and bars; trades and notes stay on this machine.",
+    "detail": "docs/DETAIL.md"
+  }
+}
