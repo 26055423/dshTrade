@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS messages(
   direction TEXT NOT NULL,
   kind TEXT NOT NULL DEFAULT 'text',
   body TEXT NOT NULL DEFAULT '',
+  data TEXT NOT NULL DEFAULT '',
   created INTEGER NOT NULL,
   read INTEGER NOT NULL DEFAULT 0
 );
@@ -88,6 +89,7 @@ export class Store {
     }
     add('contacts', 'ed25519', "TEXT NOT NULL DEFAULT ''")
     add('contacts', 'x25519', "TEXT NOT NULL DEFAULT ''")
+    add('messages', 'data', "TEXT NOT NULL DEFAULT ''")
   }
 
   meta(key, fallback = '') {
@@ -209,16 +211,17 @@ export class Store {
       .map((row) => ({ code: row.key, alias: row.alias, added: row.added, ed25519: row.ed25519, x25519: row.x25519 }))
   }
 
-  addMessage({ id, peer, direction, kind = 'text', body = '', created = Date.now(), read = 0 }) {
+  addMessage({ id, peer, direction, kind = 'text', body = '', data = null, created = Date.now(), read = 0 }) {
     if (!id || !peer) return
     this.db.prepare(
-      'INSERT OR REPLACE INTO messages(id, peer, direction, kind, body, created, read) VALUES(?,?,?,?,?,?,?)',
-    ).run(String(id), String(peer), String(direction), String(kind), String(body), Number(created), Number(read))
+      'INSERT OR REPLACE INTO messages(id, peer, direction, kind, body, data, created, read) VALUES(?,?,?,?,?,?,?,?)',
+    ).run(String(id), String(peer), String(direction), String(kind), String(body), data ? JSON.stringify(data) : '', Number(created), Number(read))
   }
 
   messages(peer, limit = 100) {
-    return this.db.prepare('SELECT id, peer, direction, kind, body, created, read FROM messages WHERE peer = ? ORDER BY created ASC LIMIT ?')
+    return this.db.prepare('SELECT id, peer, direction, kind, body, data, created, read FROM messages WHERE peer = ? ORDER BY created ASC LIMIT ?')
       .all(String(peer), Math.max(1, Math.min(500, limit)))
+      .map((row) => ({ ...row, data: row.data ? safeJson(row.data, null) : null }))
   }
 
   unread(peer) {

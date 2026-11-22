@@ -96,7 +96,8 @@ async function handle(req, res, deps) {
       return write(res, 200, { ok: true, note: saved })
     }
     if (method === 'GET' && route === '/im') {
-      return write(res, 200, { ok: true, im: deps.im ? deps.im.status() : null, contacts: deps.store.contacts() })
+      const contacts = deps.store.contacts().map((contact) => ({ ...contact, unread: deps.store.unread(contact.code) }))
+      return write(res, 200, { ok: true, im: deps.im ? deps.im.status() : null, contacts })
     }
     if (method === 'POST' && route === '/im/contact') {
       if (!deps.im) throw httpError('尚未配置中继', 409)

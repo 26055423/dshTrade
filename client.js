@@ -16,12 +16,30 @@ window.__ModuleLoader__.load({
     const deskListeners = new Set()
     function setDeskOpen(next) {
       deskOpen = next
+      if (next && chatOpen) {
+        chatOpen = false
+        for (const fn of chatListeners) fn()
+      }
       for (const fn of deskListeners) fn()
     }
     function useDeskOpen() {
       return useSyncExternalStore(
         (fn) => { deskListeners.add(fn); return () => deskListeners.delete(fn) },
         () => deskOpen,
+      )
+    }
+
+    let chatOpen = false
+    const chatListeners = new Set()
+    function setChatOpen(next) {
+      chatOpen = next
+      if (next) setDeskOpen(false)
+      for (const fn of chatListeners) fn()
+    }
+    function useChatOpen() {
+      return useSyncExternalStore(
+        (fn) => { chatListeners.add(fn); return () => chatListeners.delete(fn) },
+        () => chatOpen,
       )
     }
 
@@ -318,6 +336,17 @@ window.__ModuleLoader__.load({
       const [bars, setBars] = useState([])
       const [closing, setClosing] = useState({ ticket: '', stage: 'idle' })
       const [notice, setNotice] = useState('')
+      const [contacts, setContacts] = useState([])
+      const [shareTo, setShareTo] = useState('')
+      const [shareNote, setShareNote] = useState('')
+      const [shareStatus, setShareStatus] = useState('')
+
+      useEffect(() => {
+        if (!open) return undefined
+        let alive = true
+        call('/im').then((reply) => { if (alive) setContacts(reply.contacts || []) }).catch(() => {})
+        return () => { alive = false }
+      }, [open])
 
       useEffect(() => {
         if (!open) return undefined
@@ -355,6 +384,26 @@ window.__ModuleLoader__.load({
           refresh()
         } catch (cause) {
           setNotice(String(cause && cause.message ? cause.message : cause))
+        }
+      }
+
+      const share = async () => {
+        if (!shareTo) { setShareStatus(t('pickShare')); return }
+        if (!bars.length) { setShareStatus(t('noBars')); return }
+        const windowBars = bars.slice(-120)
+        const card = {
+          symbol: (identity && identity.symbol) || 'XAUUSD',
+          tf,
+          note: shareNote.trim(),
+          window: { from: windowBars[0][0], to: windowBars[windowBars.length - 1][0] },
+          bars: windowBars,
+        }
+        try {
+          await call('/im/send', { method: 'POST', body: JSON.stringify({ to: shareTo, kind: 'card', text: shareNote.trim() || t('shareCard'), card }) })
+          setShareStatus(t('shared'))
+          setShareNote('')
+        } catch (cause) {
+          setShareStatus(String(cause && cause.message ? cause.message : cause))
         }
       }
 
@@ -420,7 +469,16 @@ window.__ModuleLoader__.load({
 
               notice ? h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-state-warn-primary)' } }, notice) : null,
 
-              h(Ticket, { t, identity, tick: ea.tick, onDone: refresh }))))
+              h(Ticket, { t, identity, tick: ea.tick, onDone: refresh }),
+
+              h('div', { style: { display: 'grid', gap: 6, padding: 10, borderRadius: 10, background: 'var(--dsw-alias-bg-layer-1)', border: '1px solid var(--dsw-alias-border-l1)' } },
+                h('div', { style: { fontSize: 12, fontWeight: 600 } }, t('shareCard')),
+                h('select', { value: shareTo, onChange: (event) => setShareTo(event.target.value), style: inputStyle },
+                  h('option', { value: '' }, t('pickShare')),
+                  contacts.map((contact) => h('option', { key: contact.code, value: contact.code }, contact.alias || contact.code))),
+                h('input', { value: shareNote, onChange: (event) => setShareNote(event.target.value), placeholder: t('shareNote'), style: inputStyle }),
+                h('button', { type: 'button', onClick: share, disabled: !contacts.length, style: { ...buttonStyle, opacity: contacts.length ? 1 : 0.5 } }, t('shareAction')),
+                shareStatus ? h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, shareStatus) : null))))
       )
     }
 
@@ -437,6 +495,7 @@ window.__ModuleLoader__.load({
         h('span', null, phaseInfo[0]),
         h('span', null, index),
         h('div', { style: { flex: 1 } }),
+        h('button', { type: 'button', onClick: () => setChatOpen(true), style: { ...buttonStyle, padding: '2px 10px', fontSize: 11 } }, t('openChat')),
         h('button', { type: 'button', onClick: () => setDeskOpen(!open), style: { ...buttonStyle, padding: '2px 10px', fontSize: 11 } }, open ? t('closeDesk') : t('openDesk')))
     }
 
@@ -522,7 +581,8 @@ window.__ModuleLoader__.load({
       }
 
       children.push(h('div', { key: 'openDesk', style: { display: 'flex', gap: 8 } },
-        h('button', { type: 'button', onClick: () => setDeskOpen(true), style: { ...buttonStyle, background: 'var(--dsw-alias-brand-primary)', color: '#fff', borderColor: 'transparent' } }, t('openDesk'))))
+        h('button', { type: 'button', onClick: () => setDeskOpen(true), style: { ...buttonStyle, background: 'var(--dsw-alias-brand-primary)', color: '#fff', borderColor: 'transparent' } }, t('openDesk')),
+        h('button', { type: 'button', onClick: () => setChatOpen(true), style: buttonStyle }, t('openChat'))))
 
       children.push(h('div', { key: 'counts', style: { display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginTop: 4 } },
         h('span', null, t('storeTrades') + ' ' + (counts.trades || 0)),
@@ -533,6 +593,208 @@ window.__ModuleLoader__.load({
       children.push(h('div', { key: 'footer', style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)', lineHeight: 1.6, borderTop: '1px solid var(--dsw-alias-border-l1)', paddingTop: 10 } }, t('footer')))
 
       return h('div', { style: { display: 'grid', gap: 16, padding: '4px 2px 24px', color: 'var(--dsw-alias-label-primary)' } }, children)
+    }
+
+    function MiniChart({ bars }) {
+      const ref = useRef(null)
+      useEffect(() => {
+        const canvas = ref.current
+        if (!canvas || !Array.isArray(bars) || bars.length < 2) return
+        const dpr = window.devicePixelRatio || 1
+        const rect = canvas.getBoundingClientRect()
+        canvas.width = Math.max(1, Math.round(rect.width * dpr))
+        canvas.height = Math.max(1, Math.round(rect.height * dpr))
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+        ctx.clearRect(0, 0, rect.width, rect.height)
+        let min = Infinity
+        let max = -Infinity
+        for (const bar of bars) {
+          if (bar[3] < min) min = bar[3]
+          if (bar[2] > max) max = bar[2]
+        }
+        const span = Math.max(1e-9, max - min)
+        const xOf = (index) => (index / (bars.length - 1)) * (rect.width - 2) + 1
+        const yOf = (price) => rect.height - 2 - ((price - min) / span) * (rect.height - 4)
+        ctx.strokeStyle = 'rgba(120,170,255,0.9)'
+        ctx.lineWidth = 1.2
+        ctx.beginPath()
+        bars.forEach((bar, index) => {
+          const x = xOf(index)
+          const y = yOf(bar[4])
+          if (index === 0) ctx.moveTo(x, y)
+          else ctx.lineTo(x, y)
+        })
+        ctx.stroke()
+      }, [bars])
+      return h('canvas', { ref, style: { width: '100%', height: 56, display: 'block', marginTop: 6 } })
+    }
+
+    function CardView({ card }) {
+      if (!card) return null
+      return h('div', { style: { marginTop: 6, padding: 8, borderRadius: 8, background: 'var(--dsw-alias-bg-layer-2)', border: '1px solid var(--dsw-alias-border-l1)' } },
+        h('div', { style: { fontSize: 12, fontWeight: 600 } }, String(card.symbol || '') + (card.tf ? ' · ' + card.tf : '')),
+        Array.isArray(card.bars) && card.bars.length > 1 ? h(MiniChart, { bars: card.bars }) : null,
+        card.note ? h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)', marginTop: 2, whiteSpace: 'pre-wrap' } }, String(card.note)) : null)
+    }
+
+    function Chat({ t }) {
+      const open = useChatOpen()
+      const { state } = useLocalState(4000)
+      const [im, setIm] = useState(null)
+      const [contacts, setContacts] = useState([])
+      const [peer, setPeer] = useState('')
+      const [messages, setMessages] = useState([])
+      const [text, setText] = useState('')
+      const [code, setCode] = useState('')
+      const [error, setError] = useState('')
+      const [busy, setBusy] = useState(false)
+      const [copied, setCopied] = useState(false)
+
+      const identity = state && state.identity ? state.identity : null
+
+      const load = useCallback(async () => {
+        try {
+          const reply = await call('/im')
+          setIm(reply.im || null)
+          setContacts(reply.contacts || [])
+        } catch (cause) {
+          setError(String(cause && cause.message ? cause.message : cause))
+        }
+      }, [])
+
+      const loadThread = useCallback(async (who) => {
+        if (!who) { setMessages([]); return }
+        try {
+          const reply = await call('/im/messages?peer=' + encodeURIComponent(who))
+          setMessages(reply.messages || [])
+        } catch (cause) {
+          setError(String(cause && cause.message ? cause.message : cause))
+        }
+      }, [])
+
+      useEffect(() => {
+        if (!open) return undefined
+        load()
+        loadThread(peer)
+        const timer = setInterval(async () => {
+          try { await call('/im/sync', { method: 'POST', body: '{}' }) } catch {}
+          load()
+          loadThread(peer)
+        }, 4000)
+        return () => clearInterval(timer)
+      }, [open, peer, load, loadThread])
+
+      if (!open) return null
+
+      const addContact = async (event) => {
+        event.preventDefault()
+        if (!code.trim()) return
+        setBusy(true)
+        setError('')
+        try {
+          const reply = await call('/im/contact', { method: 'POST', body: JSON.stringify({ code: code.trim() }) })
+          setCode('')
+          await load()
+          if (reply.contact) setPeer(reply.contact.code)
+        } catch (cause) {
+          setError(String(cause && cause.message ? cause.message : cause))
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      const send = async (event) => {
+        event.preventDefault()
+        if (!peer || !text.trim()) return
+        setBusy(true)
+        setError('')
+        try {
+          await call('/im/send', { method: 'POST', body: JSON.stringify({ to: peer, kind: 'text', text: text.trim() }) })
+          setText('')
+          await loadThread(peer)
+          await load()
+        } catch (cause) {
+          setError(String(cause && cause.message ? cause.message : cause))
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      const copyCode = async () => {
+        if (!identity) return
+        try {
+          await navigator.clipboard.writeText(identity.friend_code)
+          setCopied(true)
+          setTimeout(() => setCopied(false), 1500)
+        } catch {}
+      }
+
+      const relayState = im ? (im.phase === 'ready' ? t('relayReady') : im.phase === 'disabled' ? t('relayDisabled') : (im.error || t('relayError'))) : t('loading')
+
+      const contactRows = contacts.map((contact) => h('button', {
+        key: contact.code,
+        type: 'button',
+        onClick: () => setPeer(contact.code),
+        style: {
+          display: 'block', width: '100%', textAlign: 'left', padding: '7px 9px', borderRadius: 8,
+          border: '1px solid ' + (peer === contact.code ? 'var(--dsw-alias-brand-primary)' : 'transparent'),
+          background: peer === contact.code ? 'var(--dsw-alias-bg-layer-2)' : 'transparent',
+          color: 'var(--dsw-alias-label-primary)', cursor: 'pointer', fontSize: 12,
+        },
+      },
+        h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 8 } },
+          h('span', null, contact.alias || contact.code),
+          contact.unread ? h('span', { style: { color: 'var(--dsw-alias-brand-primary)' } }, String(contact.unread)) : null),
+        h('div', { style: { fontSize: 10, color: 'var(--dsw-alias-label-secondary)', marginTop: 2 } }, contact.code)))
+
+      const bubbles = messages.map((message) => {
+        const outgoing = message.direction === 'out'
+        return h('div', { key: message.id, style: { display: 'flex', justifyContent: outgoing ? 'flex-end' : 'flex-start' } },
+          h('div', {
+            style: {
+              maxWidth: '76%', padding: '7px 10px', borderRadius: 10, fontSize: 12, lineHeight: 1.5,
+              background: outgoing ? 'var(--dsw-alias-brand-primary)' : 'var(--dsw-alias-bg-layer-1)',
+              color: outgoing ? '#fff' : 'var(--dsw-alias-label-primary)',
+              border: outgoing ? '1px solid transparent' : '1px solid var(--dsw-alias-border-l1)',
+              whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            },
+          },
+            message.body,
+            message.kind === 'card' ? h(CardView, { card: message.data }) : null,
+            h('div', { style: { fontSize: 9, opacity: 0.7, marginTop: 4, textAlign: 'right' } }, new Date(message.created).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }))))
+      })
+
+      const body = h('div', { style: { flex: 1, display: 'flex', minHeight: 0 } },
+        h('div', { style: { width: 250, borderRight: '1px solid var(--dsw-alias-border-l1)', padding: 10, display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0 } },
+          h('form', { onSubmit: addContact, style: { display: 'grid', gap: 6 } },
+            h('input', { value: code, onChange: (event) => setCode(event.target.value), placeholder: t('addContact'), style: inputStyle }),
+            h('button', { type: 'submit', disabled: busy, style: { ...buttonStyle, fontSize: 12 } }, t('addContactAction'))),
+          h('div', { style: { fontSize: 10, color: 'var(--dsw-alias-label-secondary)' } }, t('friendCodeHint')),
+          h('div', { style: { flex: 1, overflowY: 'auto', display: 'grid', gap: 2, alignContent: 'start' } },
+            contactRows.length ? contactRows : h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, t('noContacts')))),
+        h('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 } },
+          h('div', { style: { flex: 1, overflowY: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 8 } },
+            bubbles.length ? bubbles : h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, peer ? t('noMessages') : t('pickContact'))),
+          h('form', { onSubmit: send, style: { display: 'flex', gap: 8, padding: 10, borderTop: '1px solid var(--dsw-alias-border-l1)' } },
+            h('input', { value: text, onChange: (event) => setText(event.target.value), placeholder: t('inputPlaceholder'), disabled: !peer, style: { ...inputStyle, flex: 1 } }),
+            h('button', { type: 'submit', disabled: busy || !peer || !text.trim(), style: { ...buttonStyle, opacity: busy || !peer || !text.trim() ? 0.5 : 1 } }, t('send')))))
+
+      return h('div', {
+        style: { position: 'fixed', inset: 0, zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.45)', padding: 20 },
+        onMouseDown: (event) => { if (event.target === event.currentTarget) setChatOpen(false) },
+      },
+        h('div', { style: { width: 'min(960px, 96vw)', height: 'min(680px, 88vh)', display: 'flex', flexDirection: 'column', background: 'var(--dsw-alias-bg-base)', border: '1px solid var(--dsw-alias-border-l1)', borderRadius: 14, overflow: 'hidden', boxShadow: '0 18px 60px rgba(0,0,0,0.35)' } },
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid var(--dsw-alias-border-l1)', flexWrap: 'wrap' } },
+            h('div', { style: { fontSize: 14, fontWeight: 600 } }, t('chatTitle')),
+            h(Badge, { tone: im && im.phase === 'ready' ? 'success' : im && im.phase === 'error' ? 'error' : 'idle' }, relayState),
+            h('div', { style: { flex: 1 } }),
+            identity ? h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, t('myCode') + ' ' + identity.friend_code) : null,
+            identity ? h('button', { type: 'button', onClick: copyCode, style: { ...buttonStyle, padding: '2px 8px', fontSize: 11 } }, copied ? t('copied') : t('copy')) : null,
+            h('button', { type: 'button', onClick: () => setChatOpen(false), style: { ...buttonStyle, padding: '2px 8px', fontSize: 11 } }, t('closeChat'))),
+          error ? h('div', { style: { padding: '6px 14px', fontSize: 11, color: 'var(--dsw-alias-state-error-primary)' } }, error) : null,
+          body))
     }
 
     const ZH = {
@@ -591,6 +853,29 @@ window.__ModuleLoader__.load({
       bars: 'K线',
       tick: '买价/卖价',
       friendCode: '好友码',
+      chatTitle: '同频消息',
+      openChat: '消息',
+      closeChat: '关闭',
+      myCode: '我的好友码',
+      copy: '复制',
+      copied: '已复制',
+      addContact: '对方好友码',
+      addContactAction: '添加好友',
+      friendCodeHint: '交换好友码即可聊天，无需注册；消息端到端加密。',
+      noContacts: '还没有联系人。',
+      pickContact: '在左侧选择联系人，或添加好友码。',
+      noMessages: '还没有消息。',
+      inputPlaceholder: '输入消息…',
+      send: '发送',
+      relayReady: '中继已连接',
+      relayDisabled: '未配置中继',
+      relayError: '中继异常',
+      shareCard: '分享复盘卡片',
+      shareNote: '附言（可选）',
+      pickShare: '选择好友…',
+      shareAction: '发送卡片',
+      shared: '卡片已发送',
+      noBars: '还没有 K 线，先等行情。',
     }
 
     const EN = {
@@ -649,6 +934,29 @@ window.__ModuleLoader__.load({
       bars: 'Bars',
       tick: 'Bid / Ask',
       friendCode: 'Friend code',
+      chatTitle: 'Tongpin messages',
+      openChat: 'Messages',
+      closeChat: 'Close',
+      myCode: 'My code',
+      copy: 'Copy',
+      copied: 'Copied',
+      addContact: 'Friend code',
+      addContactAction: 'Add friend',
+      friendCodeHint: 'Exchange friend codes to chat; no sign-up, end-to-end encrypted.',
+      noContacts: 'No contacts yet.',
+      pickContact: 'Pick a contact on the left, or add a friend code.',
+      noMessages: 'No messages yet.',
+      inputPlaceholder: 'Write a message…',
+      send: 'Send',
+      relayReady: 'Relay connected',
+      relayDisabled: 'Relay not configured',
+      relayError: 'Relay error',
+      shareCard: 'Share review card',
+      shareNote: 'Note (optional)',
+      pickShare: 'Pick a friend…',
+      shareAction: 'Send card',
+      shared: 'Card sent',
+      noBars: 'No bars yet; wait for quotes.',
     }
 
     return {
@@ -675,6 +983,12 @@ window.__ModuleLoader__.load({
           id: 'dshtrade-desk',
           order: 100,
         }, () => h(DeskGate, { t })))
+
+        ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+          name: 'shell.overlay',
+          id: 'dshtrade-chat',
+          order: 101,
+        }, () => h(Chat, { t })))
       },
     }
   },

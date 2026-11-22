@@ -110,7 +110,7 @@ export class Im {
     }
     envelope.sig = this.identity.sign(canonicalEnvelope(envelope))
     await this.request('/v1/send', { envelope }, true)
-    this.store.addMessage({ id: envelope.id, peer: String(to), direction: 'out', kind: payload.kind || 'text', body: payload.text || '', created: envelope.sent, read: 1 })
+    this.store.addMessage({ id: envelope.id, peer: String(to), direction: 'out', kind: payload.kind || 'text', body: payload.text || '', data: payload.card || null, created: envelope.sent, read: 1 })
     return { id: envelope.id, sent: envelope.sent }
   }
 
@@ -131,7 +131,7 @@ export class Im {
         const payload = JSON.parse(plaintext)
         this.store.addMessage({
           id: envelope.id, peer: envelope.from, direction: 'in',
-          kind: payload.kind || 'text', body: payload.text || '', created: Number(envelope.sent) || Date.now(),
+          kind: payload.kind || 'text', body: payload.text || '', data: payload.card || null, created: Number(envelope.sent) || Date.now(),
         })
       } catch (error) {
         this.log('drop envelope', envelope.id, String(error?.message || error))
