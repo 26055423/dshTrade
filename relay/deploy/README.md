@@ -1,61 +1,69 @@
 # 部署中继
 
-中继是独立进程，和旧站 Tongpin 只共用一台机器与一个 HTTPS 入口，不读写它的代码和数据库。
+中继是**独立项目**：自己的目录、用户、Node 运行时、数据库、systemd 单元和 nginx 片段。
+和同机的其它项目只共用一件事——域名和证书（只读复用）。删掉中继不会影响别人，反之亦然。
 
-## 1. 一条命令
-
-```bash
-scp relay/server.js relay/deploy/install.sh root@<服务器>:/tmp/
-ssh root@<服务器> "bash /tmp/install.sh /tmp/server.js sync-trade.top"
-```
-
-`install.sh` 会：建 `dshtrade` 用户和目录 → 装 systemd 单元并启动 → 自检 `127.0.0.1:8791/v1/health`
-→ 找到 `server_name sync-trade.top` 的站点配置，备份后在末尾插入 `location /relay/`
-→ `nginx -t` 失败就回滚 → reload nginx → 用 `https://sync-trade.top/relay/v1/health` 自检。
-幂等：重复跑只更新 `server.js` 并重启服务，已有 `location /relay/` 就跳过。
-
-## 2. 手工步骤（脚本不适用的环境）
-
-### 2.1 建目录与用户
+## 一条命令
 
 ```bash
-sudo useradd --system --home /opt/dshtrade-relay --shell /usr/sbin/nologin dshtrade
-sudo mkdir -p /opt/dshtrade-relay /var/lib/dshtrade
-sudo cp server.js /opt/dshtrade-relay/server.js
-sudo chown -R dshtrade:dshtrade /opt/dshtrade-relay /var/lib/dshtrade
+scp relay/server.js relay/deploy/install.sh admin@<服务器>:/tmp/
+ssh admin@<服务器> "sudo bash /tmp/install.sh /tmp/server.js sync-trade.top"
 ```
 
-`server.js` 零依赖，只要求 Node 22+（`node:sqlite`）。
+脚本做的事：
 
-## 3. systemd
+1. 把 Node 22 装到 `/opt/dshtrade-relay/runtime/`（**项目私有**，不写 `/usr/local/bin`，卸载时一起删）；
+2. 建 `dshtrade` 用户、`/opt/dshtrade-relay`、`/var/lib/dshtrade`，装 `dshtrade-relay.service`；
+3. 服务只监听 `127.0.0.1:8791`，用 `RELAY_DB=/var/lib/dshtrade/relay.db`；
+4. 写 nginx 片段 `/etc/nginx/dshtrade.d/relay.conf`，并在站点 443 server 块里加**一行** `include /etc/nginx/dshtrade.d/*.conf;`（已存在就跳过；改动前备份，`nginx -t` 失败自动回滚）；
+5. `systemctl reload nginx` 后用 `https://<域名>/relay/v1/health` 自检。
+
+幂等：重复执行只更新 `server.js`、重启服务、覆盖片段。
+
+## 为什么用「目录通配 + include 一行」
+
+站点配置里只有一行 `include /etc/nginx/dshtrade.d/*.conf;`，它指向一个空目录也合法。
+下线中继时只删 `/etc/nginx/dshtrade.d/relay.conf`，目录空了、`nginx -t` 依然通过，
+**旧站配置不需要再改一次**。如果直接把 `location /relay/` 写进站点配置，删中继就得回头改别人的文件。
+
+## 独立性验收
 
 ```bash
-sudo cp dshtrade-relay.service /etc/systemd/system/dshtrade-relay.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now dshtrade-relay
-curl -s http://127.0.0.1:8791/v1/health
+# 中继停掉：站点照旧，/relay 变成 502
+sudo systemctl stop dshtrade-relay
+curl -s -o /dev/null -w '%{http_code}\n' https://sync-trade.top/
+curl -s -o /dev/null -w '%{http_code}\n' https://sync-trade.top/relay/v1/health
+sudo systemctl start dshtrade-relay
+
+# 片段摘掉：nginx 配置仍然合法
+sudo mv /etc/nginx/dshtrade.d/relay.conf /tmp/
+sudo nginx -t
+sudo mv /tmp/relay.conf /etc/nginx/dshtrade.d/
 ```
 
-## 4. 反向代理
-
-把 `nginx-relay.conf` 里的 `location /relay/` 放进现有 443 站点块，然后 `sudo nginx -t && sudo systemctl reload nginx`。
+## 卸载
 
 ```bash
-curl -s https://<你的域名>/relay/v1/health
+sudo systemctl disable --now dshtrade-relay
+sudo rm -f /etc/systemd/system/dshtrade-relay.service /etc/nginx/dshtrade.d/relay.conf
+sudo rm -rf /opt/dshtrade-relay /var/lib/dshtrade
+sudo systemctl daemon-reload && sudo systemctl reload nginx
 ```
 
-## 5. 写进插件
+站点配置里那行 `include` 留着也没关系（空目录合法）；想清干净再手动把它删掉。
+
+## 写进插件
 
 `cordis.patch.yml` 或插件配置里：
 
 ```yaml
-relayUrl: https://<你的域名>/relay
+relayUrl: https://sync-trade.top/relay
 ```
 
-保存后插件会重新登记本机公钥（`identity.js` 里的 Ed25519/X25519），好友码不变。
+保存后插件会重新登记本机公钥（Ed25519/X25519），好友码不变。
 
 ## 注意
 
 - 中继只存密文信封；`/v1/ack` 之后立刻删除，未确认的按 `RELAY_TTL` 过期。
-- 不要把 8791 直接暴露到公网，只让 nginx 从回环访问。
-- 换域名或换路径前缀都必须同步改 `relayUrl`，否则好友互相取不到件。
+- 不要把 8791 暴露到公网，只让 nginx 从回环访问。
+- 换域名、换路径前缀都必须同步改 `relayUrl`，否则好友互相取不到件。
