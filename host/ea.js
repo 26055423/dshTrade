@@ -123,6 +123,7 @@ export class EaClient {
   }
 
   fail(message) {
+    if (this.stopping) return
     this.destroy()
     this.patch({ phase: 'error', error: message })
     if (!this.stopping) this.retry = setTimeout(() => this.connect(), 8000)

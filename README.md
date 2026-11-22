@@ -30,6 +30,7 @@ node test/smoke.mjs    # 假 EA：握手/配对/快照/K 线/下单 + 本地库
 node test/routes.mjs   # 同源路由：身份、下单、来源校验、参数校验
 node test/client.mjs   # 客户端 bundle：解析与三个插槽注册
 node test/relay.mjs    # 中继：注册、加密投递、解密落库、无明文
+node test/plugin.mjs   # 真正调用 apply：装配、路由注册、卸载
 ```
 
 安装：DSH **插件 → 添加插件**（本地目录），或 `plugin_manager` 的 `install_bundle` 指向本目录。
