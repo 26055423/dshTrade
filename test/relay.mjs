@@ -65,8 +65,39 @@ assert.ok(stored.length > 0)
 assert.ok(!stored.includes('明文不应出现'), '中继库不包含正文')
 assert.ok(stored.includes('"box"'))
 
+// 部署形态：nginx 把 /relay/ 反代到回环 8791。用同样的前缀重写验证 relayUrl 带路径也能用。
+const { createServer, request: httpRequest } = await import('node:http')
+const prefixPort = 18832
+const proxy = createServer((req, res) => {
+  const target = (req.url || '/').replace(/^\/relay/, '') || '/'
+  const upstream = httpRequest({ host: '127.0.0.1', port, path: target, method: req.method, headers: req.headers }, (reply) => {
+    res.writeHead(reply.statusCode || 502, reply.headers)
+    reply.pipe(res)
+  })
+  upstream.on('error', () => { res.writeHead(502); res.end() })
+  req.pipe(upstream)
+})
+await new Promise((resolve) => proxy.listen(prefixPort, '127.0.0.1', resolve))
+
+const carolStore = new Store(path.join(dir, 'carol.db'))
+const daveStore = new Store(path.join(dir, 'dave.db'))
+const prefixUrl = `http://127.0.0.1:${prefixPort}/relay/`
+const carol = new Im({ identity: new Identity(carolStore), store: carolStore, relayUrl: prefixUrl, log: () => {} })
+const dave = new Im({ identity: new Identity(daveStore), store: daveStore, relayUrl: prefixUrl, log: () => {} })
+await carol.register()
+await dave.register()
+assert.equal(carol.status().registered, true)
+assert.equal(carol.status().relay, prefixUrl.replace(/\/+$/, ''), 'relayUrl 去掉尾部斜杠后仍带路径前缀')
+await carol.addContact(dave.identity.friendCode, '戴夫')
+await carol.send(dave.identity.friendCode, { kind: 'text', text: '经 /relay 前缀投递' })
+await dave.sync()
+assert.equal(daveStore.messages(carol.identity.friendCode)[0].body, '经 /relay 前缀投递')
+await new Promise((resolve) => proxy.close(resolve))
+carolStore.close()
+daveStore.close()
+
 await relay.close()
 aliceStore.close()
 bobStore.close()
 rmSync(dir, { recursive: true, force: true })
-console.log('relay ok: 注册/好友码/加密投递/解密落库/中继无明文')
+console.log('relay ok: 注册/好友码/加密投递/解密落库/中继无明文 + /relay 前缀可用')
