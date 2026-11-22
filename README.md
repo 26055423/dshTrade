@@ -20,6 +20,7 @@ host/routes.js      同源 HTTP 路由
 client.js           DSH 客户端插件：设置页、交易台、状态条
 docs/PROTOCOL.md    同源路由、EA 连接与中继信封契约
 docs/DETAIL.md      插件详情页
+ea/SyncTrade.mq5    SyncTrade EA（含回环来源开关），附编译产物
 relay/server.js     独立薄中继（零依赖，Node 22+）
 ```
 
@@ -54,5 +55,5 @@ symbol: XAUUSD
 - [x] IM Host：好友码、收发消息、复盘卡片载荷、本地会话
 - [x] IM 界面：会话列表、气泡、好友码添加、卡片缩略图
 - [x] 交易台内分享复盘卡片（当前窗口 K 线 + 附言）
+- [x] EA 源码入仓，新增 `InpAllowLocalOrigin` 回环来源开关（编译 0 errors）
 - [ ] 复盘点与笔记编辑界面
-- [ ] EA 侧允许 DSH 本地 Origin（需要改 EA 源码）

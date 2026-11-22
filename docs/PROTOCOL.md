@@ -59,7 +59,8 @@ Host 在发送前检查：EA 已连接、`trade_enabled`、`capabilities` 包含
 ## 2. EA 连接
 
 - 端点：`ws://127.0.0.1:18765/ws`，子协议 `tongpin-local.v1`。
-- 握手必须带 `Origin`，值取插件配置 `eaOrigin`；EA 只接受精确匹配。
+- 握手必须带 `Origin`，值取插件配置 `eaOrigin`（缺省为 DSH 页面地址）。
+- EA 默认同时接受两类来源：精确的 `InpAllowedOrigin`（HTTPS 网站），以及任意回环 `http://127.0.0.1:<端口>` / `http://localhost:<端口>`；后者由 `InpAllowLocalOrigin` 控制，关闭后只认网站来源。
 - 只读阶段发送：`ping`、`snapshot`、`bars`。不发送 `command`。
 - 本地令牌只存在 Host 内存，不落库、不进日志。
 
