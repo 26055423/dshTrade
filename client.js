@@ -11,6 +11,10 @@ window.__ModuleLoader__.load({
     const h = React.createElement
     const { useCallback, useEffect, useRef, useState, useSyncExternalStore } = React
 
+    // 交易台/聊天是全屏浮层。DSH 自己的设置面板也是浮层，层级未知，
+    // 这里用足够高的值，保证从设置里点「打开交易台」时不会被盖住。
+    const OVERLAY_Z = 2147483000
+
     // ---- 交易台开关（跨两个插槽共享）----
     let deskOpen = false
     const deskListeners = new Set()
@@ -465,7 +469,7 @@ window.__ModuleLoader__.load({
 
       return h('div', {
         style: {
-          position: 'fixed', inset: 0, zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          position: 'fixed', inset: 0, zIndex: OVERLAY_Z, display: 'flex', alignItems: 'center', justifyContent: 'center',
           background: 'rgba(0,0,0,0.45)', padding: 20,
         },
         onMouseDown: (event) => { if (event.target === event.currentTarget) close() },
@@ -594,7 +598,7 @@ window.__ModuleLoader__.load({
     }
 
     // ---- 设置页 ----
-    function Panel({ t }) {
+    function Panel({ t, close }) {
       const { state, error } = useLocalState(2000)
       const [code, setCode] = useState('')
       const [busy, setBusy] = useState(false)
@@ -671,8 +675,8 @@ window.__ModuleLoader__.load({
       }
 
       children.push(h('div', { key: 'openDesk', style: { display: 'flex', gap: 8 } },
-        h('button', { type: 'button', onClick: () => setDeskOpen(true), style: { ...buttonStyle, background: 'var(--dsw-alias-brand-primary)', color: '#fff', borderColor: 'transparent' } }, t('openDesk')),
-        h('button', { type: 'button', onClick: () => setChatOpen(true), style: buttonStyle }, t('openChat'))))
+        h('button', { type: 'button', onClick: () => { if (typeof close === 'function') close(); setDeskOpen(true) }, style: { ...buttonStyle, background: 'var(--dsw-alias-brand-primary)', color: '#fff', borderColor: 'transparent' } }, t('openDesk')),
+        h('button', { type: 'button', onClick: () => { if (typeof close === 'function') close(); setChatOpen(true) }, style: buttonStyle }, t('openChat'))))
 
       children.push(h('div', { key: 'counts', style: { display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginTop: 4 } },
         h('span', null, t('storeTrades') + ' ' + (counts.trades || 0)),
@@ -872,7 +876,7 @@ window.__ModuleLoader__.load({
             h('button', { type: 'submit', disabled: busy || !peer || !text.trim(), style: { ...buttonStyle, opacity: busy || !peer || !text.trim() ? 0.5 : 1 } }, t('send')))))
 
       return h('div', {
-        style: { position: 'fixed', inset: 0, zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.45)', padding: 20 },
+        style: { position: 'fixed', inset: 0, zIndex: OVERLAY_Z, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.45)', padding: 20 },
         onMouseDown: (event) => { if (event.target === event.currentTarget) setChatOpen(false) },
       },
         h('div', { style: { width: 'min(960px, 96vw)', height: 'min(680px, 88vh)', display: 'flex', flexDirection: 'column', background: 'var(--dsw-alias-bg-base)', border: '1px solid var(--dsw-alias-border-l1)', borderRadius: 14, overflow: 'hidden', boxShadow: '0 18px 60px rgba(0,0,0,0.35)' } },
@@ -1084,7 +1088,7 @@ window.__ModuleLoader__.load({
           id: 'dshtrade',
           label: () => t('title'),
           order: 60,
-        }, () => h(Panel, { t })))
+        }, (owner) => h(Panel, { t, close: owner && owner.close })))
 
         ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
           name: 'conversation.composer.dock',
