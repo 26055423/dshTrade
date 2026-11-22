@@ -21,32 +21,37 @@
 
 ## 评估
 
-**结论：选 B（Python 版），删除 Node 版。**
+**结论：选 A（Node 版）。**
 
 理由：
 
-1. **不新增运行时**。服务器上 `cryptography` 是 apt 系统包（41.0.7），不是为这个项目装的，直接可用；本机 Python 3.12 也有 46.0.5，可以本地跑全套测试。
-2. **运维同构**。中继就是一个 `python3 relay/server.py` 的 systemd 服务，和 `syncnote.service` 的写法、日志、目录约定一致，出问题的人不用学第二种运行时。
-3. **负载极小**。中继只做：验签、写一行密文、按收件人取件、确认删除。邮件箱上限 2000 条，单条上限 256KB，实际每秒个位数请求，`ThreadingHTTPServer` + 每请求一个 SQLite 连接（WAL）完全够。
-4. **加密不手写**。Ed25519 验签交给 `cryptography`（OpenSSL 后端），不自己实现曲线运算。
+1. **加密协议只有一份实现**。信封 canonical 串、DER/base64url 编码、好友码指纹都定死在 Node 里并被测试覆盖；换语言等于把安全边界重新推导一遍，错了只表现为「偶尔收不到」。
+2. **运行时成本是一次性的**。Node 装在 `/opt/dshtrade-relay/runtime`，属于本项目私有，和旧站没有共享；卸载时随项目删除。
+3. **和插件同栈**。本地加解密与中继验签可以共用同一批测试向量，漂移风险最低。
 
-代价与缓解：
+服务器原先没有 Node 这一点，只影响「装不装」的便利性，不改变上面的取舍。
 
-| 代价 | 缓解 |
-|---|---|
-| 放弃「零依赖 Node」这个卖点 | 换来不装运行时的部署简单性；文档写清楚依赖是 apt 包 |
-| 需要把 Node 版移植成 Python 并补齐测试 | 移植后删除 `server.js`，只保留一份实现，避免漂移 |
-| `cryptography` 版本差异（服务器 41 / 本机 46） | 只用 `serialization.load_der_public_key` + `Ed25519PublicKey.verify`，两版都稳定 |
-| 并发模型 | 每请求一个短连接 SQLite + 线程池；限流 240 次/分/IP，与 Node 版一致 |
+放弃的替代方案：
+
+- **Python 版**：服务器有 `python3` 和 apt 的 `python3-cryptography`，确实不用装运行时；但中继是协议里有签名的那一类，双实现 + 跨语言测试的长期成本更高。只有在「服务器不许装第三方运行时」或「服务端要做重度统计」时才更划算。
+- **纯标准库手写 Ed25519 验签**：密码学代码不手写。
+
+## 部署形态（已落地）
+
+- 独立项目：`/opt/dshtrade-relay`（含私有 Node 运行时）、用户 `dshtrade`、库 `/var/lib/dshtrade/relay.db`、`dshtrade-relay.service`；
+- 只监听 `127.0.0.1:8791`；
+- nginx 只共用域名与证书：片段放 `/etc/nginx/dshtrade.d/relay.conf`，站点 443 块里一行 `include /etc/nginx/dshtrade.d/*.conf;`；
+- 删中继 = 删片段 + 停服务 + 删目录，站点配置不用动；反过来中继挂掉也只是 `/relay/*` 502。
+- 步骤与卸载见 `relay/deploy/README.md`。
 
 ## 验收标准
 
-1. `python3 -m py_compile relay/server.py` 通过。
-2. 现有客户端测试全部改为启动 `python3 relay/server.py` 子进程，断言不变：
-   注册 / 好友码 / 加密投递 / 解密落库 / 中继无明文 / `/relay` 前缀 / 幂等。
-3. 部署后 `https://sync-trade.top/relay/v1/health` 返回 `{"ok":true,...}`。
-4. 用本机真实身份向中继注册一次（`/dshtrade/api/state` 的 `im.registered` 为 `true`）。
-5. 部署前后 `curl -s https://sync-trade.top/` 与旧站交易接口响应不变。
+1. `python3 -m py_compile relay/server.py` 通过。（Node 方案下不适用，改为 `node --check relay/server.js` 与本地 5 套测试。）
+2. 中继测试覆盖：注册 / 好友码 / 加密投递 / 解密落库 / 中继无明文 / `/relay` 前缀 / 幂等。
+3. `https://sync-trade.top/relay/v1/health` 返回 `{"ok":true,...}`。
+4. 本机身份注册成功（`/dshtrade/api/state` 的 `im.registered` 为 `true`）。
+5. 旧站首页与交易接口在部署前后响应不变；停掉中继、摘掉片段时旧站仍正常。
+
 
 ## 不采用的方案
 
