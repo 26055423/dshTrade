@@ -13,6 +13,7 @@ DATA=/var/lib/dshtrade
 UNIT=/etc/systemd/system/dshtrade-relay.service
 
 command -v node >/dev/null || { echo "需要 Node 22+（node:sqlite）"; exit 1; }
+NODE_BIN="$(command -v node)"
 node -e "require('node:sqlite')" 2>/dev/null || { echo "当前 node 版本没有 node:sqlite，请升级到 22+"; exit 1; }
 
 id dshtrade >/dev/null 2>&1 || useradd --system --home "$APP" --shell /usr/sbin/nologin dshtrade
@@ -20,7 +21,7 @@ id dshtrade >/dev/null 2>&1 || useradd --system --home "$APP" --shell /usr/sbin/
 install -d -o dshtrade -g dshtrade "$APP" "$DATA"
 install -o dshtrade -g dshtrade -m 0644 "$SRC" "$APP/server.js"
 
-cat > "$UNIT" <<'EOF'
+cat > "$UNIT" <<EOF
 [Unit]
 Description=dshTrade thin relay (ciphertext envelopes only)
 After=network-online.target
@@ -35,7 +36,7 @@ Environment=RELAY_HOST=127.0.0.1
 Environment=RELAY_PORT=8791
 Environment=RELAY_DB=/var/lib/dshtrade/relay.db
 Environment=RELAY_TTL=604800
-ExecStart=/usr/bin/node /opt/dshtrade-relay/server.js
+ExecStart=$NODE_BIN /opt/dshtrade-relay/server.js
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true
