@@ -618,6 +618,18 @@ window.__ModuleLoader__.load({
       )
     }
 
+    // 插件详情页头部的按钮：只在「同频」自己的详情页出现。
+    function DetailOpenAction({ t, subject }) {
+      let text = ''
+      try { text = JSON.stringify(subject || '') } catch (error) { text = '' }
+      if (!/dshtrade/i.test(text)) return null
+      return h('button', {
+        type: 'button',
+        onClick: () => openDeskPanel(),
+        style: { ...buttonStyle, background: 'var(--dsw-alias-brand-primary)', color: '#fff', borderColor: 'transparent' },
+      }, t('openDesk'))
+    }
+
     function DockStrip({ t }) {
       const open = useDeskOpen()
       const { state } = useLocalState(4000)
@@ -1140,6 +1152,13 @@ window.__ModuleLoader__.load({
           name: 'main',
           key: 'dshtrade-desk',
         }, () => h(Desk, { t, inline: true })))
+
+        // 插件详情页头部加一个入口，用户停在「同频本机交易台」这一页就能进去。
+        ctx.slots.inject('plugins.detail.actions', () => ctx.slots.register({
+          name: 'plugins.detail.actions',
+          id: 'dshtrade-open',
+          order: 10,
+        }, (subject) => h(DetailOpenAction, { t, subject: subject && (subject.subject || subject) })))
 
         ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section',
