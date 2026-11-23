@@ -162,7 +162,7 @@ window.__ModuleLoader__.load({
     // ---- K 线画布 ----
     const PAD = { left: 10, right: 58, top: 12, bottom: 22 }
 
-    function drawChart(canvas, bars, hover, tf) {
+    function drawChart(canvas, bars, hover, tf, overlays) {
       const ctx = canvas.getContext('2d')
       if (!ctx) return
       const dpr = window.devicePixelRatio || 1
@@ -223,9 +223,53 @@ window.__ModuleLoader__.load({
         ctx.fillRect(cx - bodyW / 2, Math.min(yo, yc), bodyW, Math.max(1, Math.abs(yc - yo)))
       }
 
+      // 当前价线：有 tick 用中间价，否则用最后一根收盘。
+      const lastPrice = overlays && overlays.tick
+        ? (Number(overlays.tick.bid) + Number(overlays.tick.ask)) / 2
+        : bars[bars.length - 1][4]
+      if (Number.isFinite(lastPrice) && lastPrice >= min && lastPrice <= max) {
+        const y = yOf(lastPrice)
+        ctx.strokeStyle = 'rgba(120,160,220,0.75)'
+        ctx.setLineDash([2, 4])
+        ctx.beginPath()
+        ctx.moveTo(PAD.left, y)
+        ctx.lineTo(PAD.left + plotW, y)
+        ctx.stroke()
+        ctx.setLineDash([])
+        ctx.fillStyle = 'rgba(60,110,180,0.95)'
+        ctx.fillRect(PAD.left + plotW + 2, y - 8, PAD.right - 6, 16)
+        ctx.fillStyle = '#fff'
+        ctx.textAlign = 'left'
+        ctx.font = '10px ui-monospace, SFMono-Regular, monospace'
+        ctx.fillText(lastPrice.toFixed(2), PAD.left + plotW + 6, y)
+      }
+
+      // 持仓开仓价线：多单绿、空单红，右侧标单号与手数。
+      const positions = (overlays && overlays.positions) || []
+      for (const position of positions) {
+        const price = Number(position.price_open)
+        if (!Number.isFinite(price) || price < min || price > max) continue
+        const y = yOf(price)
+        const buy = position.side === 'buy'
+        ctx.strokeStyle = buy ? 'rgba(47,158,110,0.9)' : 'rgba(212,85,91,0.9)'
+        ctx.beginPath()
+        ctx.moveTo(PAD.left, y)
+        ctx.lineTo(PAD.left + plotW, y)
+        ctx.stroke()
+        const text = '#' + position.ticket + ' ' + (buy ? 'BUY' : 'SELL') + ' ' + position.volume
+        ctx.font = '10px ui-monospace, SFMono-Regular, monospace'
+        ctx.textAlign = 'left'
+        const width = ctx.measureText(text).width + 8
+        ctx.fillStyle = buy ? 'rgba(47,158,110,0.92)' : 'rgba(212,85,91,0.92)'
+        ctx.fillRect(PAD.left + 4, y - 8, width, 15)
+        ctx.fillStyle = '#fff'
+        ctx.fillText(text, PAD.left + 8, y)
+      }
+
       ctx.textAlign = 'center'
       ctx.fillStyle = 'rgba(150,150,150,0.85)'
       const step = Math.max(1, Math.ceil(bars.length / 6))
+
       for (let i = 0; i < bars.length; i += step) {
         const date = new Date(bars[i][0] * 1000)
         const hm = String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0')
@@ -277,11 +321,12 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function Chart({ bars, tf }) {
+    function Chart({ bars, tf, positions, tick }) {
       const ref = useRef(null)
       const [hover, setHover] = useState(null)
       const [view, setView] = useState({ count: 160, right: 0 })
       const drag = useRef(null)
+      const overlays = { positions: Array.isArray(positions) ? positions : [], tick: tick || null }
 
       const total = Array.isArray(bars) ? bars.length : 0
       const count = Math.max(20, Math.min(Math.max(total, 20), Math.round(view.count)))
@@ -292,7 +337,7 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         const canvas = ref.current
         if (!canvas) return undefined
-        const redraw = () => drawChart(canvas, visible, hover, tf)
+        const redraw = () => drawChart(canvas, visible, hover, tf, overlays)
         redraw()
         const observer = new ResizeObserver(redraw)
         if (canvas.parentElement) observer.observe(canvas.parentElement)
@@ -301,7 +346,7 @@ window.__ModuleLoader__.load({
           observer.disconnect()
           window.removeEventListener('resize', redraw)
         }
-      }, [bars, view, hover, tf])
+      }, [bars, view, hover, tf, positions, tick])
 
       // 滚轮缩放：React 的 onWheel 是 passive 的，preventDefault 不生效，所以自己挂原生监听。
       useEffect(() => {
@@ -644,7 +689,7 @@ window.__ModuleLoader__.load({
 
           h('div', { style: { flex: 1, display: 'flex', minHeight: 0 } },
             h('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, padding: 10, gap: 6 } },
-              h(Chart, { bars, tf }),
+              h(Chart, { bars, tf, positions, tick: ea.tick }),
               h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)', display: 'flex', gap: 12 } },
                 h('span', null, t('bars') + ' ' + bars.length),
                 h('span', null, t('tick') + ' ' + (ea.tick ? ea.tick.bid + ' / ' + ea.tick.ask : '—')))),
