@@ -117,7 +117,10 @@ export class EaClient {
       const wasConnected = this.state.phase === 'connected'
       this.patch({
         phase: 'disconnected',
-        error: wasConnected ? '本机 EA 连接已断开，交易已停用；重新连接后请核对未完成指令。' : this.state.error,
+        // 没进入 connected 就被关掉，最常见的原因是 EA 只保留一条连接，别的网页已经占着。
+        error: wasConnected
+          ? '本机 EA 连接已断开，交易已停用；重新连接后请核对未完成指令。'
+          : (this.state.error || '本机 EA 在握手后立即关闭了连接：它同一时刻只接受一条连接，请先关掉已连着的网页（sync-trade.top）或让当前会话断开，再重试。'),
         identity: null, account: null, positions: [], orders: [],
       })
       this.token = ''
