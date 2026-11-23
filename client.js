@@ -380,20 +380,23 @@ window.__ModuleLoader__.load({
       const [noteStatus, setNoteStatus] = useState('')
       const [trades, setTrades] = useState([])
       const [historyStatus, setHistoryStatus] = useState('')
+      const [pairCode, setPairCode] = useState('')
+      const [pairBusy, setPairBusy] = useState(false)
+      const [pairMessage, setPairMessage] = useState('')
 
       const loadTrades = () => call('/trades?limit=20').then((reply) => setTrades(reply.trades || [])).catch(() => {})
 
       useEffect(() => {
-        if (!open) return undefined
+        if (!open && !inline) return undefined
         let alive = true
         call('/im').then((reply) => { if (alive) setContacts(reply.contacts || []) }).catch(() => {})
         call('/notes?limit=20').then((reply) => { if (alive) setNotes(reply.notes || []) }).catch(() => {})
         loadTrades()
         return () => { alive = false }
-      }, [open])
+      }, [open, inline])
 
       useEffect(() => {
-        if (!open) return undefined
+        if (!open && !inline) return undefined
         let alive = true
         const load = async () => {
           try {
@@ -407,7 +410,7 @@ window.__ModuleLoader__.load({
         load()
         const timer = setInterval(load, 5000)
         return () => { alive = false; clearInterval(timer) }
-      }, [open, tf])
+      }, [open, inline, tf])
 
       // 浮层模式由 deskOpen 控制；主区域模式由 layout.selectPanel 控制，必须照常渲染。
       if (!open && !inline) return null
@@ -496,6 +499,24 @@ window.__ModuleLoader__.load({
         }
       }
 
+      // 交易台里直接配对：EA 显示 8 位码期间，这里应该有输入框。
+      const pairNow = async (event) => {
+        if (event && event.preventDefault) event.preventDefault()
+        const code = pairCode.trim()
+        if (!/^\d{8}$/.test(code)) { setPairMessage(t('pairHint')); return }
+        setPairBusy(true)
+        setPairMessage('')
+        try {
+          await call('/pair', { method: 'POST', body: JSON.stringify({ code }) })
+          setPairCode('')
+          refresh()
+        } catch (cause) {
+          setPairMessage(String(cause && cause.message ? cause.message : cause))
+        } finally {
+          setPairBusy(false)
+        }
+      }
+
       const closeDesk = () => {
         if (inline) {
           if (layoutApi) { try { layoutApi.selectPanel(null); return } catch {} }
@@ -529,6 +550,18 @@ window.__ModuleLoader__.load({
             identity ? h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-secondary)' } },
               identity.account_id + (identity.server ? ' @ ' + identity.server : '') + ' · ' + (identity.demo ? t('demo') : t('real'))) : null,
             h('div', { style: { flex: 1 } }),
+            phase === 'pairing' ? h('form', {
+              onSubmit: pairNow,
+              style: { display: 'flex', gap: 6, alignItems: 'center' },
+            },
+              h('input', {
+                value: pairCode, onChange: (event) => setPairCode(event.target.value), inputMode: 'numeric', maxLength: 8,
+                placeholder: t('codePlaceholder'), style: { ...inputStyle, width: 130, letterSpacing: 2, padding: '3px 8px' },
+              }),
+              h('button', { type: 'submit', disabled: pairBusy, style: { ...buttonStyle, padding: '3px 10px', background: 'var(--dsw-alias-brand-primary)', color: '#fff', borderColor: 'transparent', opacity: pairBusy ? 0.6 : 1 } },
+                pairBusy ? t('pairing') : t('pair'))) : null,
+            phase === 'confirming' ? h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-state-warn-primary)' } }, t('confirmHint')) : null,
+            pairMessage ? h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-state-warn-primary)' } }, pairMessage) : null,
             ['1m', '5m', '15m', '30m', '1h', '4h', '1d'].map((value) => h('button', {
               key: value, onClick: () => setTf(value),
               style: {
