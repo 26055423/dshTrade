@@ -33,6 +33,7 @@ function fakeRequire(name) {
 }
 
 const ctx = {
+  layout: { selectPanel() {} },
   locale: {
     register(ns, dicts) {
       if (locales.some((entry) => entry.ns === ns)) throw new Error(`locale namespace "${ns}" already has locale "zh"`)
@@ -51,12 +52,13 @@ const source = await readFile(new URL('../client.js', import.meta.url), 'utf8')
 new Function('window', source)(globalThis.window)
 
 assert.ok(factoryResult, 'factory 已执行')
-assert.deepEqual(factoryResult.inject, ['slots', 'locale'])
+assert.deepEqual(factoryResult.inject, ['slots', 'locale', 'layout'])
 factoryResult.apply(ctx)
 
-assert.deepEqual(injected.sort(), ['conversation.composer.dock', 'settings.section', 'shell.overlay', 'shell.overlay'])
-assert.deepEqual(registered.map((spec) => spec.name).sort(), ['conversation.composer.dock', 'settings.section', 'shell.overlay', 'shell.overlay'])
+assert.deepEqual(injected.sort(), ['conversation.composer.dock', 'main', 'settings.section', 'shell.overlay', 'shell.overlay'])
+assert.deepEqual(registered.map((spec) => spec.name).sort(), ['conversation.composer.dock', 'main', 'settings.section', 'shell.overlay', 'shell.overlay'])
 assert.ok(registered.some((spec) => spec.id === 'dshtrade-chat'), '注册了消息浮层')
+assert.ok(registered.some((spec) => spec.name === 'main' && spec.key === 'dshtrade-desk'), '交易台注册进主区域')
 assert.equal(registered.find((spec) => spec.name === 'settings.section').id, 'dshtrade')
 assert.equal(locales.length, 1)
 assert.ok(locales[0].dicts.zh.title)
@@ -66,6 +68,6 @@ assert.ok(locales[0].dicts.en.title)
 registered.length = 0
 injected.length = 0
 assert.doesNotThrow(() => factoryResult.apply(ctx), '重复 apply 不应抛错')
-assert.equal(registered.length, 4, '重复 apply 仍然注册四个插槽')
+assert.equal(registered.length, 5, '重复 apply 仍然注册五个插槽')
 assert.equal(locales.length, 1, '语言包仍然只有一份')
-console.log('client ok: bundle 解析 + 四个插槽注册 + 中英文本地化 + 重复 apply 幂等')
+console.log('client ok: bundle 解析 + 五个插槽注册（含主区域面板）+ 中英文本地化 + 重复 apply 幂等')

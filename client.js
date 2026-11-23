@@ -15,6 +15,15 @@ window.__ModuleLoader__.load({
     // 这里用足够高的值，保证从设置里点「打开交易台」时不会被盖住。
     const OVERLAY_Z = 2147483000
 
+    // layout 服务：把交易台放进主区域（而不是浮层），null 表示回到对话。
+    let layoutApi = null
+    function openDeskPanel() {
+      if (layoutApi) {
+        try { layoutApi.selectPanel('dshtrade-desk'); return } catch (error) { console.warn('[dshtrade] selectPanel failed', error) }
+      }
+      setDeskOpen(true)
+    }
+
     // ---- 交易台开关（跨两个插槽共享）----
     let deskOpen = false
     const deskListeners = new Set()
@@ -333,7 +342,7 @@ window.__ModuleLoader__.load({
     }
 
     // ---- 全屏交易台 ----
-    function Desk({ t }) {
+      function Desk({ t, inline = false }) {
       const open = useDeskOpen()
       const { state, error, refresh } = useLocalState(2000)
       const [tf, setTf] = useState('1m')
@@ -465,22 +474,33 @@ window.__ModuleLoader__.load({
         }
       }
 
-      const close = () => setDeskOpen(false)
+      const closeDesk = () => {
+        if (inline) {
+          if (layoutApi) { try { layoutApi.selectPanel(null); return } catch {} }
+        }
+        setDeskOpen(false)
+      }
+      const close = closeDesk
 
-      return h('div', {
-        style: {
-          position: 'fixed', inset: 0, zIndex: OVERLAY_Z, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: 'rgba(0,0,0,0.45)', padding: 20,
-        },
-        onMouseDown: (event) => { if (event.target === event.currentTarget) close() },
-      },
-        h('div', {
-          style: {
+      const outerStyle = inline
+        ? { height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }
+        : {
+            position: 'fixed', inset: 0, zIndex: OVERLAY_Z, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: 'rgba(0,0,0,0.45)', padding: 20,
+          }
+      const cardStyle = inline
+        ? { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--dsw-alias-bg-base)', overflow: 'hidden' }
+        : {
             width: 'min(1180px, 96vw)', height: 'min(860px, 90vh)', display: 'flex', flexDirection: 'column',
             background: 'var(--dsw-alias-bg-base)', border: '1px solid var(--dsw-alias-border-l1)',
             borderRadius: 14, overflow: 'hidden', boxShadow: '0 18px 60px rgba(0,0,0,0.35)',
-          },
-        },
+          }
+      const outerProps = inline
+        ? { style: outerStyle }
+        : { style: outerStyle, onMouseDown: (event) => { if (event.target === event.currentTarget) close() } }
+
+      return h('div', outerProps,
+        h('div', { style: cardStyle },
           h('div', { style: { display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderBottom: '1px solid var(--dsw-alias-border-l1)' } },
             h('div', { style: { fontSize: 14, fontWeight: 600 } }, t('deskTitle')),
             h(Badge, { tone: phaseInfo[1] }, phaseInfo[0]),
@@ -590,7 +610,7 @@ window.__ModuleLoader__.load({
         h('span', null, index),
         h('div', { style: { flex: 1 } }),
         h('button', { type: 'button', onClick: () => setChatOpen(true), style: { ...buttonStyle, padding: '2px 10px', fontSize: 11 } }, t('openChat')),
-        h('button', { type: 'button', onClick: () => setDeskOpen(!open), style: { ...buttonStyle, padding: '2px 10px', fontSize: 11 } }, open ? t('closeDesk') : t('openDesk')))
+        h('button', { type: 'button', onClick: () => { if (open) setDeskOpen(false); else openDeskPanel() }, style: { ...buttonStyle, padding: '2px 10px', fontSize: 11 } }, open ? t('closeDesk') : t('openDesk')))
     }
 
     function DeskGate({ t }) {
@@ -675,7 +695,7 @@ window.__ModuleLoader__.load({
       }
 
       children.push(h('div', { key: 'openDesk', style: { display: 'flex', gap: 8 } },
-        h('button', { type: 'button', onClick: () => { if (typeof close === 'function') close(); setDeskOpen(true) }, style: { ...buttonStyle, background: 'var(--dsw-alias-brand-primary)', color: '#fff', borderColor: 'transparent' } }, t('openDesk')),
+        h('button', { type: 'button', onClick: () => { if (typeof close === 'function') close(); openDeskPanel() }, style: { ...buttonStyle, background: 'var(--dsw-alias-brand-primary)', color: '#fff', borderColor: 'transparent' } }, t('openDesk')),
         h('button', { type: 'button', onClick: () => { if (typeof close === 'function') close(); setChatOpen(true) }, style: buttonStyle }, t('openChat'))))
 
       children.push(h('div', { key: 'counts', style: { display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginTop: 4 } },
@@ -1078,7 +1098,7 @@ window.__ModuleLoader__.load({
     }
 
     return {
-      inject: ['slots', 'locale'],
+        inject: ['slots', 'locale', 'layout'],
       apply(ctx) {
         try {
           ctx.locale.register('dshtrade', { zh: ZH, en: EN })
@@ -1088,6 +1108,14 @@ window.__ModuleLoader__.load({
           if (!/already has locale/i.test(String(error && error.message))) throw error
         }
         const t = ctx.locale.bind('dshtrade')
+        layoutApi = ctx.layout || null
+
+        // 交易台作为「主区域面板」：ctx.layout.selectPanel('dshtrade-desk') 切过去，
+        // selectPanel(null) 回到对话。浮层那份保留为兜底（layout 不可用时）。
+        ctx.slots.inject('main', () => ctx.slots.register({
+          name: 'main',
+          key: 'dshtrade-desk',
+        }, () => h(Desk, { t, inline: true })))
 
         ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section',
