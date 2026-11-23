@@ -17,9 +17,30 @@ window.__ModuleLoader__.load({
 
     // layout 服务：把交易台放进主区域（而不是浮层），null 表示回到对话。
     let layoutApi = null
+    // 操作结果直接显示在状态条上，方便定位「点了没反应」这类问题。
+    let deskStatus = ''
+    const deskStatusListeners = new Set()
+    function setDeskStatus(text) {
+      deskStatus = String(text || '')
+      for (const fn of deskStatusListeners) fn()
+    }
+    function useDeskStatus() {
+      return useSyncExternalStore(
+        (fn) => { deskStatusListeners.add(fn); return () => deskStatusListeners.delete(fn) },
+        () => deskStatus,
+      )
+    }
     function openDeskPanel() {
       if (layoutApi) {
-        try { layoutApi.selectPanel('dshtrade-desk'); return } catch (error) { console.warn('[dshtrade] selectPanel failed', error) }
+        try {
+          layoutApi.selectPanel('dshtrade-desk')
+          setDeskStatus('layout.selectPanel 已调用')
+          return
+        } catch (error) {
+          setDeskStatus('selectPanel 失败：' + String(error && error.message ? error.message : error))
+        }
+      } else {
+        setDeskStatus('没有 layout 服务，改用浮层')
       }
       setDeskOpen(true)
     }
@@ -388,7 +409,8 @@ window.__ModuleLoader__.load({
         return () => { alive = false; clearInterval(timer) }
       }, [open, tf])
 
-      if (!open) return null
+      // 浮层模式由 deskOpen 控制；主区域模式由 layout.selectPanel 控制，必须照常渲染。
+      if (!open && !inline) return null
       const ea = (state && state.ea) || {}
       const identity = ea.identity || null
       const account = ea.account || null
@@ -483,7 +505,7 @@ window.__ModuleLoader__.load({
       const close = closeDesk
 
       const outerStyle = inline
-        ? { height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }
+        ? { height: '100%', minHeight: '60vh', display: 'flex', flexDirection: 'column' }
         : {
             position: 'fixed', inset: 0, zIndex: OVERLAY_Z, display: 'flex', alignItems: 'center', justifyContent: 'center',
             background: 'rgba(0,0,0,0.45)', padding: 20,
@@ -603,11 +625,13 @@ window.__ModuleLoader__.load({
       const phase = ea.phase || 'disconnected'
       const phaseInfo = PHASES[phase] || PHASES.disconnected
       const index = ea.identity ? ea.identity.account_id + ' · ' + (ea.identity.demo ? t('demo') : t('real')) : t('localOnly')
+      const status = useDeskStatus()
       return h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, padding: '3px 4px', fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
         h('span', { style: { width: 6, height: 6, borderRadius: 999, background: toneColor(phaseInfo[1]) } }),
         h('span', null, t('deskTitle')),
         h('span', null, phaseInfo[0]),
         h('span', null, index),
+        status ? h('span', { style: { color: 'var(--dsw-alias-state-warn-primary)' } }, status) : null,
         h('div', { style: { flex: 1 } }),
         h('button', { type: 'button', onClick: () => setChatOpen(true), style: { ...buttonStyle, padding: '2px 10px', fontSize: 11 } }, t('openChat')),
         h('button', { type: 'button', onClick: () => { if (open) setDeskOpen(false); else openDeskPanel() }, style: { ...buttonStyle, padding: '2px 10px', fontSize: 11 } }, open ? t('closeDesk') : t('openDesk')))
