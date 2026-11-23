@@ -162,7 +162,7 @@ window.__ModuleLoader__.load({
     // ---- K 线画布 ----
     const PAD = { left: 10, right: 58, top: 12, bottom: 22 }
 
-    function drawChart(canvas, bars, hover) {
+    function drawChart(canvas, bars, hover, tf) {
       const ctx = canvas.getContext('2d')
       if (!ctx) return
       const dpr = window.devicePixelRatio || 1
@@ -228,7 +228,9 @@ window.__ModuleLoader__.load({
       const step = Math.max(1, Math.ceil(bars.length / 6))
       for (let i = 0; i < bars.length; i += step) {
         const date = new Date(bars[i][0] * 1000)
-        const label = String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0')
+        const hm = String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0')
+        const md = (date.getMonth() + 1) + '/' + date.getDate()
+        const label = tf === '1d' || tf === '4h' ? md : (tf === '1h' ? md + ' ' + hm : hm)
         ctx.fillText(label, PAD.left + slot * (i + 0.5), H - 8)
       }
 
@@ -244,6 +246,27 @@ window.__ModuleLoader__.load({
         ctx.lineTo(PAD.left + plotW, hover.y)
         ctx.stroke()
         ctx.setLineDash([])
+
+        // 右轴价格标签
+        const price = max - ((hover.y - PAD.top) / plotH) * span
+        const priceText = price.toFixed(2)
+        ctx.fillStyle = 'rgba(90,90,90,0.95)'
+        ctx.fillRect(PAD.left + plotW + 2, hover.y - 8, PAD.right - 6, 16)
+        ctx.fillStyle = '#f2f2f2'
+        ctx.font = '10px ui-monospace, SFMono-Regular, monospace'
+        ctx.textAlign = 'left'
+        ctx.fillText(priceText, PAD.left + plotW + 6, hover.y)
+
+        // 底部时间标签
+        const hoverDate = new Date(bar[0] * 1000)
+        const stamp = (hoverDate.getMonth() + 1) + '/' + hoverDate.getDate() + ' ' +
+          String(hoverDate.getHours()).padStart(2, '0') + ':' + String(hoverDate.getMinutes()).padStart(2, '0')
+        ctx.fillStyle = 'rgba(90,90,90,0.95)'
+        ctx.fillRect(cx - 34, H - PAD.bottom + 1, 68, 15)
+        ctx.fillStyle = '#f2f2f2'
+        ctx.textAlign = 'center'
+        ctx.fillText(stamp, cx, H - PAD.bottom + 8)
+
         const text = 'O ' + bar[1] + '  H ' + bar[2] + '  L ' + bar[3] + '  C ' + bar[4]
         ctx.fillStyle = 'rgba(30,30,30,0.88)'
         const width = ctx.measureText(text).width + 12
@@ -254,13 +277,22 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function Chart({ bars }) {
+    function Chart({ bars, tf }) {
       const ref = useRef(null)
       const [hover, setHover] = useState(null)
+      const [view, setView] = useState({ count: 160, right: 0 })
+      const drag = useRef(null)
+
+      const total = Array.isArray(bars) ? bars.length : 0
+      const count = Math.max(20, Math.min(Math.max(total, 20), Math.round(view.count)))
+      const right = Math.max(0, Math.min(view.right, Math.max(0, total - count)))
+      const start = Math.max(0, total - count - right)
+      const visible = total ? bars.slice(start, total - right) : []
+
       useEffect(() => {
         const canvas = ref.current
         if (!canvas) return undefined
-        const redraw = () => drawChart(canvas, bars, hover)
+        const redraw = () => drawChart(canvas, visible, hover, tf)
         redraw()
         const observer = new ResizeObserver(redraw)
         if (canvas.parentElement) observer.observe(canvas.parentElement)
@@ -269,26 +301,63 @@ window.__ModuleLoader__.load({
           observer.disconnect()
           window.removeEventListener('resize', redraw)
         }
-      }, [bars, hover])
+      }, [bars, view, hover, tf])
+
+      // 滚轮缩放：React 的 onWheel 是 passive 的，preventDefault 不生效，所以自己挂原生监听。
+      useEffect(() => {
+        const canvas = ref.current
+        if (!canvas) return undefined
+        const onWheel = (event) => {
+          event.preventDefault()
+          setView((current) => {
+            const factor = event.deltaY > 0 ? 1.15 : 1 / 1.15
+            const next = Math.round(current.count * factor)
+            return { count: Math.max(20, Math.min(Math.max(total, 20), next)), right: current.right }
+          })
+        }
+        canvas.addEventListener('wheel', onWheel, { passive: false })
+        return () => canvas.removeEventListener('wheel', onWheel)
+      }, [total])
+
+      const slotOf = (rect) => (rect.width - PAD.left - PAD.right) / Math.max(1, visible.length)
 
       const move = (event) => {
         const canvas = ref.current
-        if (!canvas || !bars.length) return
+        if (!canvas || !visible.length) return
         const rect = canvas.getBoundingClientRect()
-        const plotW = rect.width - PAD.left - PAD.right
-        const slot = plotW / bars.length
+        if (drag.current) {
+          const delta = Math.round((event.clientX - drag.current.x) / Math.max(1, slotOf(rect)))
+          const maxRight = Math.max(0, total - count)
+          setView((current) => ({ count: current.count, right: Math.max(0, Math.min(maxRight, drag.current.right + delta)) }))
+          return
+        }
+        const slot = slotOf(rect)
         const index = Math.floor((event.clientX - rect.left - PAD.left) / slot)
-        if (index < 0 || index >= bars.length) { setHover(null); return }
+        if (index < 0 || index >= visible.length) { setHover(null); return }
         setHover({ index, y: event.clientY - rect.top })
       }
+
+      const down = (event) => {
+        if (event.button !== 0) return
+        drag.current = { x: event.clientX, right }
+        setHover(null)
+      }
+      const up = () => { drag.current = null }
+      const leave = () => { drag.current = null; setHover(null) }
+      const reset = () => setView({ count: 160, right: 0 })
 
       return h('div', { style: { position: 'relative', flex: 1, minHeight: 220, minWidth: 0 } },
         h('canvas', {
           ref,
           onMouseMove: move,
-          onMouseLeave: () => setHover(null),
-          style: { display: 'block', width: '100%', height: '100%', cursor: 'crosshair' },
-        }))
+          onMouseDown: down,
+          onMouseUp: up,
+          onMouseLeave: leave,
+          onDoubleClick: reset,
+          style: { display: 'block', width: '100%', height: '100%', cursor: drag.current ? 'grabbing' : 'crosshair' },
+        }),
+        h('div', { style: { position: 'absolute', right: 10, top: 8, fontSize: 10, color: 'var(--dsw-alias-label-secondary)', pointerEvents: 'none' } },
+          visible.length + ' 根 · 滚轮缩放 · 拖动平移 · 双击复位'))
     }
 
     // ---- 下单票 ----
@@ -575,7 +644,7 @@ window.__ModuleLoader__.load({
 
           h('div', { style: { flex: 1, display: 'flex', minHeight: 0 } },
             h('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, padding: 10, gap: 6 } },
-              h(Chart, { bars }),
+              h(Chart, { bars, tf }),
               h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)', display: 'flex', gap: 12 } },
                 h('span', null, t('bars') + ' ' + bars.length),
                 h('span', null, t('tick') + ' ' + (ea.tick ? ea.tick.bid + ' / ' + ea.tick.ask : '—')))),
